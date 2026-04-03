@@ -69,6 +69,8 @@ typedef struct {
     int length;             /* grain duration in samples */
     float position;         /* fractional read position */
     float speed;            /* playback rate */
+    float speed_target;     /* for glide algorithm */
+    float speed_glide_rate; /* per-sample lerp rate */
     int direction;          /* +1 forward, -1 reverse */
     float pan;              /* -1.0 to +1.0 */
     float amplitude;        /* base amplitude */
@@ -197,6 +199,38 @@ typedef struct {
 
     /* FDN stereo reverb */
     fdn_reverb_t reverb;
+
+    /* Seq algorithm state */
+    int seq_step;
+    int seq_positions[8];
+    int seq_order[8];
+
+    /* Glide algorithm state */
+    int glide_toggle;       /* alternating up/down for variation C */
+
+    /* Haze algorithm state */
+    int haze_counter;
+
+    /* Tunnel algorithm state */
+    int tunnel_sub_counter;
+
+    /* Strum algorithm state - onset detection */
+    int onset_positions[8];
+    int onset_count;
+    int onset_head;
+    float onset_prev_rms;
+    int strum_cascade_step;
+    int strum_cascade_timer;
+    int strum_cascade_total;
+
+    /* Blocks/Interrupt state */
+    int interrupt_active;
+    int interrupt_remaining;
+
+    /* Arp state */
+    int arp_step;
+    int arp_step_timer;
+    int arp_cycle;
 } dioramatic_instance_t;
 
 /* ============================================================================
@@ -400,42 +434,59 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
 }
 
 /* ============================================================================
- * Mosaic algorithm - grain trigger
+ * Shared grain helpers
  * ============================================================================ */
 
-static void mosaic_trigger_grain(dioramatic_instance_t *inst) {
-    /* Find a free grain slot */
-    grain_t *g = NULL;
+static inline int shape_to_env(float shape) {
+    if (shape < 0.25f) return 0;
+    if (shape < 0.50f) return 1;
+    if (shape < 0.75f) return 2;
+    return 3;
+}
+
+static grain_t *find_free_grain(dioramatic_instance_t *inst) {
     for (int i = 0; i < MAX_GRAINS; i++) {
-        if (!inst->grains[i].active) {
-            g = &inst->grains[i];
-            break;
-        }
+        if (!inst->grains[i].active) return &inst->grains[i];
     }
-    if (!g) return;  /* No free slots */
+    return NULL;
+}
 
-    int sub = inst->subdivision_samples;
-    int wp = inst->capture.write_pos;
-
+static void init_grain_common(grain_t *g, dioramatic_instance_t *inst, int start, int length, float speed) {
     g->active = 1;
-    g->start = (wp - (int)(rng_float(&inst->rng_state) * (float)sub) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-    g->length = sub;
-    g->env_inc = 1.0f / (float)g->length;
+    g->start = start;
+    g->length = length;
+    g->env_inc = 1.0f / (float)length;
     g->env_phase = 0.0f;
     g->position = 0.0f;
     g->direction = inst->reverse ? -1 : 1;
-    g->pan = rng_float(&inst->rng_state) * 1.0f - 0.5f;
+    g->env_shape = shape_to_env(inst->shape);
+    g->pan = rng_float(&inst->rng_state) - 0.5f;
     g->amplitude = 0.3f + inst->repeats * 0.7f;
+    g->speed = speed;
+    g->speed_target = 0.0f;
+    g->speed_glide_rate = 0.0f;
+}
 
-    /* Envelope shape from Shape knob */
-    if (inst->shape < 0.25f)
-        g->env_shape = 0;
-    else if (inst->shape < 0.50f)
-        g->env_shape = 1;
-    else if (inst->shape < 0.75f)
-        g->env_shape = 2;
-    else
-        g->env_shape = 3;
+static int count_active_grains(dioramatic_instance_t *inst) {
+    int count = 0;
+    for (int i = 0; i < MAX_GRAINS; i++) {
+        if (inst->grains[i].active) count++;
+    }
+    return count;
+}
+
+/* ============================================================================
+ * Algorithm 0: Mosaic - grain trigger
+ * ============================================================================ */
+
+static void mosaic_trigger_grain(dioramatic_instance_t *inst) {
+    grain_t *g = find_free_grain(inst);
+    if (!g) return;
+
+    int sub = inst->subdivision_samples;
+    int wp = inst->capture.write_pos;
+    int start = (wp - (int)(rng_float(&inst->rng_state) * (float)sub) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+    init_grain_common(g, inst, start, sub, 1.0f);
 
     /* Speed per variation */
     float r = rng_float(&inst->rng_state);
@@ -460,14 +511,7 @@ static void mosaic_trigger_grain(dioramatic_instance_t *inst) {
     }
 }
 
-/* ============================================================================
- * Algorithm tick (called per sample)
- * ============================================================================ */
-
-static void algorithm_tick(dioramatic_instance_t *inst) {
-    if (inst->algorithm != 0) return;  /* Only Mosaic for now */
-
-    /* Trigger interval: more frequent with higher activity */
+static void mosaic_tick(dioramatic_instance_t *inst) {
     int trigger_interval = inst->subdivision_samples / (1 + (int)(inst->activity * 3.0f));
     if (trigger_interval < 1) trigger_interval = 1;
 
@@ -475,6 +519,609 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
     if (inst->trigger_counter >= trigger_interval) {
         inst->trigger_counter = 0;
         mosaic_trigger_grain(inst);
+    }
+}
+
+/* ============================================================================
+ * Algorithm 1: Seq - Sequenced Rearrangement
+ * ============================================================================ */
+
+static void seq_shuffle(dioramatic_instance_t *inst) {
+    /* Fisher-Yates shuffle */
+    for (int i = 7; i > 0; i--) {
+        int j = (int)(rng_float(&inst->rng_state) * (float)(i + 1));
+        if (j > i) j = i;
+        int tmp = inst->seq_order[i];
+        inst->seq_order[i] = inst->seq_order[j];
+        inst->seq_order[j] = tmp;
+    }
+}
+
+static void seq_capture_slices(dioramatic_instance_t *inst) {
+    int wp = inst->capture.write_pos;
+    int sub = inst->subdivision_samples;
+    for (int i = 0; i < 8; i++) {
+        inst->seq_positions[i] = (wp - sub * (8 - i) + CAPTURE_SAMPLES * 8) % CAPTURE_SAMPLES;
+    }
+    seq_shuffle(inst);
+}
+
+static void seq_tick(dioramatic_instance_t *inst) {
+    int sub = inst->subdivision_samples;
+
+    inst->trigger_counter++;
+    if (inst->trigger_counter >= sub) {
+        inst->trigger_counter = 0;
+
+        /* Every 8 steps, re-capture and re-shuffle */
+        if (inst->seq_step % 8 == 0) {
+            seq_capture_slices(inst);
+        }
+
+        int idx = inst->seq_order[inst->seq_step % 8];
+        int start = inst->seq_positions[idx];
+        int step = inst->seq_step;
+
+        switch (inst->variation) {
+            case 0: { /* A: Normal speed, random amplitude mod */
+                grain_t *g = find_free_grain(inst);
+                if (g) {
+                    init_grain_common(g, inst, start, sub, 1.0f);
+                    /* Random amplitude modulation scaled by activity */
+                    float amp_mod = 1.0f - inst->activity * rng_float(&inst->rng_state) * 0.5f;
+                    g->amplitude *= amp_mod;
+                }
+                break;
+            }
+            case 1: { /* B: Alternating normal/half-speed, optional pad grain */
+                grain_t *g = find_free_grain(inst);
+                if (g) {
+                    float speed = 1.0f - 0.5f * inst->activity * ((step % 2 == 0) ? 1.0f : 0.0f);
+                    init_grain_common(g, inst, start, sub, speed);
+                }
+                /* At max activity, add a long quiet pad grain */
+                if (inst->activity > 0.8f) {
+                    grain_t *pad = find_free_grain(inst);
+                    if (pad) {
+                        int pad_len = sub * 4;
+                        if (pad_len > CAPTURE_SAMPLES - 1) pad_len = CAPTURE_SAMPLES - 1;
+                        init_grain_common(pad, inst, start, pad_len, 0.5f);
+                        pad->amplitude = 0.2f;
+                    }
+                }
+                break;
+            }
+            case 2: { /* C: Overlapping layers */
+                int layers = 1 + (int)(inst->activity * 3.0f);
+                for (int l = 0; l < layers; l++) {
+                    grain_t *g = find_free_grain(inst);
+                    if (g) {
+                        int offset = (int)(rng_float(&inst->rng_state) * 200.0f) - 100;
+                        int s = (start + offset + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                        init_grain_common(g, inst, s, sub, 1.0f);
+                    }
+                }
+                break;
+            }
+            case 3: { /* D: Bit-crush at high activity */
+                grain_t *g = find_free_grain(inst);
+                if (g) {
+                    float speed = (inst->activity > 0.7f) ? 0.5f : 1.0f;
+                    init_grain_common(g, inst, start, sub, speed);
+                    if (inst->activity > 0.7f) {
+                        g->amplitude *= (0.5f + 0.5f * inst->activity);
+                    }
+                }
+                break;
+            }
+        }
+
+        inst->seq_step++;
+    }
+}
+
+/* ============================================================================
+ * Algorithm 2: Glide - Pitch Portamento
+ * ============================================================================ */
+
+static void glide_tick(dioramatic_instance_t *inst) {
+    int sub = inst->subdivision_samples;
+    int grain_len = (int)((float)sub * (0.5f + inst->repeats * 1.5f));
+    if (grain_len > CAPTURE_SAMPLES - 1) grain_len = CAPTURE_SAMPLES - 1;
+    if (grain_len < 441) grain_len = 441;
+
+    /* Trigger overlapping grains at subdivision intervals */
+    inst->trigger_counter++;
+    if (inst->trigger_counter >= sub) {
+        inst->trigger_counter = 0;
+
+        int wp = inst->capture.write_pos;
+        int start = (wp - sub + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+
+        grain_t *g = find_free_grain(inst);
+        if (g) {
+            float start_speed = 1.0f;
+            float target_speed = 1.0f;
+
+            switch (inst->variation) {
+                case 0: /* A: Ascending */
+                    target_speed = 1.0f + inst->activity * 1.0f;
+                    break;
+                case 1: /* B: Descending */
+                    target_speed = 1.0f - inst->activity * 0.5f;
+                    break;
+                case 2: /* C: Alternating up/down */
+                    if (inst->glide_toggle)
+                        target_speed = 1.0f + inst->activity * 1.0f;
+                    else
+                        target_speed = 1.0f - inst->activity * 0.5f;
+                    inst->glide_toggle = !inst->glide_toggle;
+                    break;
+                case 3: /* D: Random target */
+                    target_speed = 0.5f + rng_float(&inst->rng_state) * 1.5f;
+                    break;
+            }
+
+            init_grain_common(g, inst, start, grain_len, start_speed);
+            g->speed_target = target_speed;
+            g->speed_glide_rate = 0.0001f;
+        }
+    }
+}
+
+/* ============================================================================
+ * Algorithm 3: Haze - Granular Cloud
+ * ============================================================================ */
+
+static void haze_tick(dioramatic_instance_t *inst) {
+    /* Trigger interval: from ~100ms down to ~0.66ms based on activity */
+    int trigger_interval = (int)(441.0f / (1.0f + inst->activity * 14.0f));
+    if (trigger_interval < 1) trigger_interval = 1;
+
+    inst->haze_counter++;
+    if (inst->haze_counter >= trigger_interval) {
+        inst->haze_counter = 0;
+
+        grain_t *g = find_free_grain(inst);
+        if (!g) return;
+
+        int wp = inst->capture.write_pos;
+
+        /* Grain length: 10-50ms for A, 10-30ms for others adjusted per variation */
+        int base_min = 441;
+        int base_range = 1764;
+
+        float speed = 1.0f;
+        int spread = 22050;  /* 500ms default spread */
+
+        switch (inst->variation) {
+            case 0: /* A: Speed 1.0, short grains (10-30ms) */
+                base_range = 882;  /* 441 to 1323 */
+                break;
+            case 1: /* B: Many overlapping, full 2-second spread */
+                spread = CAPTURE_SAMPLES;
+                break;
+            case 2: /* C: Octave shimmer - mix of 1.0 and 2.0 */
+                speed = (rng_float(&inst->rng_state) < 0.5f) ? 1.0f : 2.0f;
+                break;
+            case 3: /* D: Darker - mix of 1.0 and 0.5 */
+                speed = (rng_float(&inst->rng_state) < 0.5f) ? 1.0f : 0.5f;
+                break;
+        }
+
+        int length = base_min + (int)(rng_float(&inst->rng_state) * (float)base_range);
+        int start = (wp - (int)(rng_float(&inst->rng_state) * (float)spread) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+
+        init_grain_common(g, inst, start, length, speed);
+        g->amplitude = 0.15f + inst->repeats * 0.4f;
+    }
+}
+
+/* ============================================================================
+ * Algorithm 4: Tunnel - Drone Generator
+ * ============================================================================ */
+
+static void tunnel_tick(dioramatic_instance_t *inst) {
+    int sub = inst->subdivision_samples;
+    int drone_len = sub * 4;
+    if (drone_len > CAPTURE_SAMPLES - 1) drone_len = CAPTURE_SAMPLES - 1;
+    int wp = inst->capture.write_pos;
+
+    /* Trigger a new drone when no active grains remain */
+    int active = count_active_grains(inst);
+    if (active == 0) {
+        grain_t *g = find_free_grain(inst);
+        if (g) {
+            int start = (wp - sub + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+            init_grain_common(g, inst, start, drone_len, 1.0f);
+            g->amplitude = 0.3f + inst->repeats * 0.7f;
+
+            switch (inst->variation) {
+                case 0: /* A: Triangle envelope for filter-like sweep */
+                    g->env_shape = 2;
+                    break;
+                case 1: /* B: Normal drone (overtones triggered below) */
+                    break;
+                case 2: /* C: Normal drone (chorus triggered below) */
+                    break;
+                case 3: /* D: Normal drone (decay layers below) */
+                    break;
+            }
+        }
+    }
+
+    /* Overlay grains at longer intervals if activity > 0.3 */
+    inst->tunnel_sub_counter++;
+    if (inst->tunnel_sub_counter >= sub * 4 && inst->activity > 0.3f) {
+        inst->tunnel_sub_counter = 0;
+
+        int start = (wp - (int)(rng_float(&inst->rng_state) * (float)sub) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+        int overlay_count = 1 + (int)(inst->activity * 2.0f);
+
+        switch (inst->variation) {
+            case 0: /* A: Extra triangle-envelope overlays */
+                for (int i = 0; i < overlay_count; i++) {
+                    grain_t *g = find_free_grain(inst);
+                    if (g) {
+                        init_grain_common(g, inst, start, drone_len / 2, 1.0f);
+                        g->env_shape = 2;
+                        g->amplitude *= 0.5f;
+                    }
+                }
+                break;
+            case 1: { /* B: Overtone grains at 2x and 3x */
+                grain_t *g2 = find_free_grain(inst);
+                if (g2) {
+                    init_grain_common(g2, inst, start, drone_len / 2, 2.0f);
+                    g2->amplitude *= 0.3f * inst->activity;
+                }
+                grain_t *g3 = find_free_grain(inst);
+                if (g3) {
+                    init_grain_common(g3, inst, start, drone_len / 3, 3.0f);
+                    g3->amplitude *= 0.2f * inst->activity;
+                }
+                break;
+            }
+            case 2: { /* C: Chorus — same position with slight offset */
+                grain_t *g2 = find_free_grain(inst);
+                if (g2) {
+                    int offset = 20 + (int)(rng_float(&inst->rng_state) * 80.0f);
+                    int s = (start + offset) % CAPTURE_SAMPLES;
+                    init_grain_common(g2, inst, s, drone_len, 1.0f);
+                    g2->amplitude *= 0.4f;
+                }
+                break;
+            }
+            case 3: { /* D: Progressively lower amplitude layers */
+                for (int i = 0; i < overlay_count; i++) {
+                    grain_t *g = find_free_grain(inst);
+                    if (g) {
+                        init_grain_common(g, inst, start, drone_len / 2, 1.0f);
+                        g->amplitude *= 0.5f / (float)(i + 1);
+                    }
+                }
+                break;
+            }
+        }
+    }
+}
+
+/* ============================================================================
+ * Algorithm 5: Strum - Onset Chain
+ * ============================================================================ */
+
+static void strum_tick(dioramatic_instance_t *inst) {
+    int sub = inst->subdivision_samples;
+    int wp = inst->capture.write_pos;
+
+    /* Onset detection */
+    float rms = fabsf(inst->capture.buffer[wp].l) + fabsf(inst->capture.buffer[wp].r);
+    if (rms > 0.1f && inst->onset_prev_rms < 0.05f) {
+        inst->onset_positions[inst->onset_head] = wp;
+        inst->onset_head = (inst->onset_head + 1) % 8;
+        if (inst->onset_count < 8) inst->onset_count++;
+        inst->strum_cascade_step = 0;
+        inst->strum_cascade_timer = 0;
+        inst->strum_cascade_total = 2 + (int)(inst->repeats * 6.0f);
+    }
+    inst->onset_prev_rms = rms;
+
+    if (inst->onset_count == 0) return;
+
+    /* Strum cascade logic */
+    int cascade_interval = sub / (4 + (int)(inst->activity * 12.0f));
+    if (cascade_interval < 1) cascade_interval = 1;
+
+    switch (inst->variation) {
+        case 0: { /* A: Most recent onset, repeated at subdivision intervals */
+            inst->trigger_counter++;
+            if (inst->trigger_counter >= sub) {
+                inst->trigger_counter = 0;
+                int recent = (inst->onset_head - 1 + 8) % 8;
+                grain_t *g = find_free_grain(inst);
+                if (g) {
+                    init_grain_common(g, inst, inst->onset_positions[recent], sub, 1.0f);
+                }
+            }
+            break;
+        }
+        case 1: { /* B: Many overlapping copies of most recent onset (phasing) */
+            inst->trigger_counter++;
+            if (inst->trigger_counter >= sub) {
+                inst->trigger_counter = 0;
+                int recent = (inst->onset_head - 1 + 8) % 8;
+                int copies = 2 + (int)(inst->activity * 4.0f);
+                for (int c = 0; c < copies; c++) {
+                    grain_t *g = find_free_grain(inst);
+                    if (g) {
+                        int offset = (int)(rng_float(&inst->rng_state) * 100.0f) - 50;
+                        int s = (inst->onset_positions[recent] + offset + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                        init_grain_common(g, inst, s, sub, 1.0f);
+                    }
+                }
+            }
+            break;
+        }
+        case 2: /* C: Cascading chain through all stored onsets */
+        case 3: { /* D: Like C but with double-speed grains interleaved */
+            if (inst->strum_cascade_step < inst->strum_cascade_total) {
+                inst->strum_cascade_timer++;
+                if (inst->strum_cascade_timer >= cascade_interval) {
+                    inst->strum_cascade_timer = 0;
+                    int oi = (inst->onset_head - 1 - (inst->strum_cascade_step % inst->onset_count) + 80) % 8;
+                    grain_t *g = find_free_grain(inst);
+                    if (g) {
+                        init_grain_common(g, inst, inst->onset_positions[oi], sub, 1.0f);
+                    }
+                    /* Variation D: interleave double-speed grain */
+                    if (inst->variation == 3) {
+                        grain_t *g2 = find_free_grain(inst);
+                        if (g2) {
+                            init_grain_common(g2, inst, inst->onset_positions[oi], sub / 2, 2.0f);
+                            g2->amplitude *= 0.6f;
+                        }
+                    }
+                    inst->strum_cascade_step++;
+                }
+            }
+            break;
+        }
+    }
+}
+
+/* ============================================================================
+ * Algorithm 6: Blocks - Glitch Stutters
+ * ============================================================================ */
+
+static void blocks_tick(dioramatic_instance_t *inst) {
+    int sub = inst->subdivision_samples;
+    int wp = inst->capture.write_pos;
+
+    inst->trigger_counter++;
+    if (inst->trigger_counter >= sub) {
+        inst->trigger_counter = 0;
+
+        float prob;
+        int grain_len;
+        int start = (wp - sub / 2 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+
+        switch (inst->variation) {
+            case 0: { /* A: Regular, predictable stutters */
+                prob = 1.0f;
+                grain_len = sub / (2 + (int)(inst->activity * 6.0f));
+                if (grain_len < 64) grain_len = 64;
+                if (rng_float(&inst->rng_state) < prob) {
+                    grain_t *g = find_free_grain(inst);
+                    if (g) {
+                        init_grain_common(g, inst, start, grain_len, 1.0f);
+                    }
+                }
+                break;
+            }
+            case 1: { /* B: Random bursts — probabilistic */
+                prob = 0.2f + inst->activity * 0.8f;
+                grain_len = sub / 4 + (int)(rng_float(&inst->rng_state) * (float)(sub / 4));
+                if (grain_len < 64) grain_len = 64;
+                if (rng_float(&inst->rng_state) < prob) {
+                    grain_t *g = find_free_grain(inst);
+                    if (g) {
+                        init_grain_common(g, inst, start, grain_len, 1.0f);
+                    }
+                }
+                break;
+            }
+            case 2: { /* C: Pitch-shifted bursts */
+                prob = 0.2f + inst->activity * 0.8f;
+                grain_len = sub / 4 + (int)(rng_float(&inst->rng_state) * (float)(sub / 4));
+                if (grain_len < 64) grain_len = 64;
+                if (rng_float(&inst->rng_state) < prob) {
+                    static const float block_speeds[4] = {0.5f, 1.0f, 1.5f, 2.0f};
+                    int si = (int)(rng_float(&inst->rng_state) * 4.0f);
+                    if (si > 3) si = 3;
+                    grain_t *g = find_free_grain(inst);
+                    if (g) {
+                        init_grain_common(g, inst, start, grain_len, block_speeds[si]);
+                    }
+                }
+                break;
+            }
+            case 3: { /* D: Multiple rapid-fire short grains */
+                prob = 0.2f + inst->activity * 0.8f;
+                if (rng_float(&inst->rng_state) < prob) {
+                    int count = 2 + (int)(inst->activity * 4.0f);
+                    for (int c = 0; c < count; c++) {
+                        grain_t *g = find_free_grain(inst);
+                        if (g) {
+                            grain_len = sub / 8 + (int)(rng_float(&inst->rng_state) * (float)(sub / 8));
+                            if (grain_len < 64) grain_len = 64;
+                            int s = (start + (int)(rng_float(&inst->rng_state) * (float)(sub / 2)) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                            init_grain_common(g, inst, s, grain_len, 1.0f);
+                            g->amplitude *= 0.3f + rng_float(&inst->rng_state) * 0.7f;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+}
+
+/* ============================================================================
+ * Algorithm 7: Interrupt - Dry + Glitch Bursts
+ * ============================================================================ */
+
+static void interrupt_tick(dioramatic_instance_t *inst) {
+    int sub = inst->subdivision_samples;
+    int wp = inst->capture.write_pos;
+
+    /* Count down active interrupt */
+    if (inst->interrupt_active) {
+        inst->interrupt_remaining--;
+        if (inst->interrupt_remaining <= 0) {
+            inst->interrupt_active = 0;
+        }
+    }
+
+    inst->trigger_counter++;
+    if (inst->trigger_counter >= sub) {
+        inst->trigger_counter = 0;
+
+        float prob = inst->repeats * 0.5f;
+        if (rng_float(&inst->rng_state) < prob) {
+            inst->interrupt_active = 1;
+            inst->interrupt_remaining = sub / 2;
+
+            int start = (wp - sub + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+            int count = 1 + (int)(inst->activity * 2.0f);
+
+            for (int c = 0; c < count; c++) {
+                grain_t *g = find_free_grain(inst);
+                if (!g) break;
+
+                switch (inst->variation) {
+                    case 0: { /* A: Rearranged at speed 1.0 */
+                        int s = (start + (int)(rng_float(&inst->rng_state) * (float)sub) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                        init_grain_common(g, inst, s, sub / 2, 1.0f);
+                        break;
+                    }
+                    case 1: { /* B: Pitch-shifted 0.5 or 2.0 */
+                        float speed = (rng_float(&inst->rng_state) < 0.5f) ? 0.5f : 2.0f;
+                        int s = (start + (int)(rng_float(&inst->rng_state) * (float)sub) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                        init_grain_common(g, inst, s, sub / 2, speed);
+                        break;
+                    }
+                    case 2: { /* C: Triangle envelope for sweep feel */
+                        int s = (start + (int)(rng_float(&inst->rng_state) * (float)sub) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                        init_grain_common(g, inst, s, sub / 2, 1.0f);
+                        g->env_shape = 2; /* triangle */
+                        break;
+                    }
+                    case 3: { /* D: Very short, loud */
+                        int grain_len = sub / 8;
+                        if (grain_len < 64) grain_len = 64;
+                        int s = (start + (int)(rng_float(&inst->rng_state) * (float)sub) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                        init_grain_common(g, inst, s, grain_len, 1.0f);
+                        g->amplitude = 1.0f;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* ============================================================================
+ * Algorithm 8: Arp - Granular Arpeggio
+ * ============================================================================ */
+
+static const float arp_intervals[] = {
+    1.0f,       /* unison */
+    1.25992f,   /* major 3rd */
+    1.49831f,   /* perfect 5th */
+    2.0f,       /* octave */
+};
+
+static void arp_tick(dioramatic_instance_t *inst) {
+    int sub = inst->subdivision_samples;
+    int step_interval = sub / (2 + (int)(inst->activity * 6.0f));
+    if (step_interval < 1) step_interval = 1;
+
+    inst->arp_step_timer++;
+    if (inst->arp_step_timer >= step_interval) {
+        inst->arp_step_timer = 0;
+
+        int wp = inst->capture.write_pos;
+        int start = (wp - sub + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+
+        /* Determine interval index based on variation and step */
+        int idx = 0;
+        int pattern_len = 4;
+
+        switch (inst->variation) {
+            case 0: /* A: Ascending 0,1,2,3 */
+                idx = inst->arp_step % 4;
+                break;
+            case 1: /* B: Descending 3,2,1,0 */
+                idx = 3 - (inst->arp_step % 4);
+                break;
+            case 2: /* C: Up-down 0,1,2,3,2,1 */
+                pattern_len = 6;
+                {
+                    int p = inst->arp_step % 6;
+                    if (p < 4) idx = p;
+                    else idx = 6 - p; /* 4->2, 5->1 */
+                }
+                break;
+            case 3: /* D: Random */
+                idx = (int)(rng_float(&inst->rng_state) * 4.0f);
+                if (idx > 3) idx = 3;
+                break;
+        }
+
+        float speed = arp_intervals[idx];
+
+        grain_t *g = find_free_grain(inst);
+        if (g) {
+            int grain_len = sub;
+            if (grain_len > CAPTURE_SAMPLES - 1) grain_len = CAPTURE_SAMPLES - 1;
+            init_grain_common(g, inst, start, grain_len, speed);
+
+            /* Fade amplitude over cycles */
+            int max_cycles = 1 + (int)(inst->repeats * 4.0f);
+            int current_cycle = inst->arp_step / pattern_len;
+            if (max_cycles > 0 && current_cycle < max_cycles) {
+                g->amplitude *= 1.0f - (float)current_cycle / (float)(max_cycles + 1);
+            } else if (current_cycle >= max_cycles) {
+                g->amplitude *= 0.1f;
+            }
+        }
+
+        inst->arp_step++;
+        /* Reset cycle tracking */
+        if (inst->variation == 2) {
+            if (inst->arp_step % 6 == 0) inst->arp_cycle++;
+        } else {
+            if (inst->arp_step % 4 == 0) inst->arp_cycle++;
+        }
+    }
+}
+
+/* ============================================================================
+ * Algorithm tick dispatcher (called per sample)
+ * ============================================================================ */
+
+static void algorithm_tick(dioramatic_instance_t *inst) {
+    switch (inst->algorithm) {
+        case 0: mosaic_tick(inst); break;
+        case 1: seq_tick(inst); break;
+        case 2: glide_tick(inst); break;
+        case 3: haze_tick(inst); break;
+        case 4: tunnel_tick(inst); break;
+        case 5: strum_tick(inst); break;
+        case 6: blocks_tick(inst); break;
+        case 7: interrupt_tick(inst); break;
+        case 8: arp_tick(inst); break;
+        default: break;  /* algorithms 9-10 use delay engine, handled separately */
     }
 }
 
@@ -509,6 +1156,9 @@ static void *v2_create_instance(const char *module_dir, const char *config_json)
     inst->lfo_phase = 0.0f;
     init_envelope_tables(inst->env_tables);
     recalculate_subdivision(inst);
+
+    /* Initialize algorithm state */
+    for (int i = 0; i < 8; i++) inst->seq_order[i] = i;
 
     /* Initialize SVF coefficients */
     inst->svf_cached_filter = -1.0f;  /* force first update */
@@ -606,6 +1256,11 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
             wet_l += samp_l * amp * pan_l;
             wet_r += samp_r * amp * pan_r;
 
+            /* Glide: lerp speed toward target */
+            if (gr->speed_target != 0.0f) {
+                gr->speed += (gr->speed_target - gr->speed) * gr->speed_glide_rate;
+            }
+
             /* Advance grain with pitch modulation */
             gr->position += gr->speed * pitch_mod * (float)gr->direction;
             gr->env_phase += gr->env_inc;
@@ -627,9 +1282,13 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
             wet_r += rev_out_r * inst->space;
         }
 
-        /* 8. Mix dry/wet */
-        float out_l = dry_l * (1.0f - inst->mix) + wet_l * inst->mix;
-        float out_r = dry_r * (1.0f - inst->mix) + wet_r * inst->mix;
+        /* 8. Mix dry/wet (Interrupt algorithm forces 100% wet during events) */
+        float mix = inst->mix;
+        if (inst->algorithm == 7 && inst->interrupt_active) {
+            mix = 1.0f;
+        }
+        float out_l = dry_l * (1.0f - mix) + wet_l * mix;
+        float out_r = dry_r * (1.0f - mix) + wet_r * mix;
 
         /* 9. Soft clip and convert back to int16 */
         if (out_l > 1.0f) out_l = 1.0f;
