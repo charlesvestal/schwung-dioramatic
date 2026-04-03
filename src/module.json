@@ -31,7 +31,7 @@
             {"key": "pitch_mod_depth", "label": "Pitch Depth", "type": "float", "min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01, "unit": "%"},
             {"key": "pitch_mod_rate", "label": "Pitch Rate", "type": "float", "min": 0.0, "max": 1.0, "default": 0.3, "step": 0.01, "unit": "%"},
             {"key": "filter_res", "label": "Resonance", "type": "float", "min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01, "unit": "%"},
-            {"key": "reverb_mode", "label": "Reverb Mode", "type": "enum", "options": ["Room","Plate","Hall","Ambient"], "default": "Room"},
+            {"key": "reverb_mode", "label": "Reverb Mode", "type": "enum", "options": ["Bright","Dark","Hall","Ambient"], "default": "Bright"},
             {"key": "reverse", "label": "Reverse", "type": "enum", "options": ["Off","On"], "default": "Off"},
             {"key": "hold", "label": "Hold", "type": "enum", "options": ["Off","On"], "default": "Off"}
           ],

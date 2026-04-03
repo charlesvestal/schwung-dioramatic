@@ -149,7 +149,7 @@ static const char *time_div_names[NUM_TIME_DIVS] = {
 
 #define NUM_REVERB_MODES 4
 static const char *reverb_mode_names[NUM_REVERB_MODES] = {
-    "Room", "Plate", "Hall", "Ambient"
+    "Bright", "Dark", "Hall", "Ambient"
 };
 
 static const char *onoff_names[2] = { "Off", "On" };
@@ -198,8 +198,8 @@ typedef struct {
 } reverb_preset_t;
 
 static const reverb_preset_t reverb_presets[4] = {
-    /* Room */    {{1087, 1283, 1447, 1663}, 0.75f, 0.3f, 0,    {142, 107, 379, 277}},
-    /* Plate */   {{2017, 2389, 2777, 3191}, 0.85f, 0.5f, 441,  {142, 107, 379, 277}},
+    /* Bright */  {{1087, 1283, 1447, 1663}, 0.75f, 0.3f, 0,    {142, 107, 379, 277}},
+    /* Dark */    {{2017, 2389, 2777, 3191}, 0.83f, 0.7f, 441,  {142, 107, 379, 277}},
     /* Hall */    {{3547, 4177, 4831, 5557}, 0.92f, 0.6f, 882,  {142, 107, 379, 277}},
     /* Ambient */ {{5501, 6469, 7481, 8179}, 0.97f, 0.7f, 1323, {142, 107, 379, 277}},
 };
@@ -239,6 +239,9 @@ typedef struct {
 
     /* LFO for pitch modulation */
     float lfo_phase;
+
+    /* Shape LFO for wet signal volume modulation */
+    float shape_lfo_phase;
 
     /* SVF lowpass filter */
     svf_state_t svf_l, svf_r;
@@ -532,7 +535,7 @@ static void init_grain_common(grain_t *g, dioramatic_instance_t *inst, int start
     g->env_phase = 0.0f;
     g->position = 0.0f;
     g->direction = inst->reverse ? -1 : 1;
-    g->env_shape = shape_to_env(inst->shape);
+    g->env_shape = 0;  /* Always Hann — Shape knob controls LFO modulation instead */
     g->pan = rng_float(&inst->rng_state) - 0.5f;
     g->amplitude = 0.3f + inst->repeats * 0.7f;
     g->speed = speed;
@@ -810,8 +813,7 @@ static void tunnel_tick(dioramatic_instance_t *inst) {
             g->amplitude = 0.3f + inst->repeats * 0.7f;
 
             switch (inst->variation) {
-                case 0: /* A: Triangle envelope for filter-like sweep */
-                    g->env_shape = 2;
+                case 0: /* A: Smooth sweep */
                     break;
                 case 1: /* B: Normal drone (overtones triggered below) */
                     break;
@@ -832,12 +834,11 @@ static void tunnel_tick(dioramatic_instance_t *inst) {
         int overlay_count = 1 + (int)(inst->activity * 2.0f);
 
         switch (inst->variation) {
-            case 0: /* A: Extra triangle-envelope overlays */
+            case 0: /* A: Extra overlays */
                 for (int i = 0; i < overlay_count; i++) {
                     grain_t *g = find_free_grain(inst);
                     if (g) {
                         init_grain_common(g, inst, start, drone_len / 2, 1.0f);
-                        g->env_shape = 2;
                         g->amplitude *= 0.5f;
                     }
                 }
@@ -1083,10 +1084,9 @@ static void interrupt_tick(dioramatic_instance_t *inst) {
                         init_grain_common(g, inst, s, sub / 2, speed);
                         break;
                     }
-                    case 2: { /* C: Triangle envelope for sweep feel */
+                    case 2: { /* C: Smooth sweep feel */
                         int s = (start + (int)(rng_float(&inst->rng_state) * (float)sub) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
                         init_grain_common(g, inst, s, sub / 2, 1.0f);
-                        g->env_shape = 2; /* triangle */
                         break;
                     }
                     case 3: { /* D: Very short, loud */
@@ -1314,7 +1314,7 @@ static void *v2_create_instance(const char *module_dir, const char *config_json)
     inst->pitch_mod_depth = 0.0f;
     inst->pitch_mod_rate = 0.3f;
     inst->filter_res = 0.0f;
-    inst->reverb_mode = 0;      /* Room */
+    inst->reverb_mode = 0;      /* Bright */
     inst->reverse = 0;          /* Off */
     inst->hold = 0;             /* Off */
 
@@ -1422,6 +1422,27 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         int wp = inst->capture.write_pos;
         inst->capture.buffer[wp].l = dry_l;
         inst->capture.buffer[wp].r = dry_r;
+
+        /* 2b. Hold/Freeze: feed hold buffer into capture buffer so grains re-process it */
+        if (inst->hold_state.active) {
+            float hold_l = inst->hold_state.buffer[inst->hold_state.read_pos].l;
+            float hold_r = inst->hold_state.buffer[inst->hold_state.read_pos].r;
+            inst->hold_state.read_pos = (inst->hold_state.read_pos + 1) % inst->hold_state.length;
+
+            float fade = inst->hold_state.fade;
+            /* Blend hold content into capture buffer (replacing dry input for grains) */
+            inst->capture.buffer[wp].l = hold_l * fade + dry_l * (1.0f - fade);
+            inst->capture.buffer[wp].r = hold_r * fade + dry_r * (1.0f - fade);
+
+            /* Advance fade (~50ms = 2205 samples) */
+            inst->hold_state.fade += (float)inst->hold_state.fade_dir / 2205.0f;
+            if (inst->hold_state.fade > 1.0f) inst->hold_state.fade = 1.0f;
+            if (inst->hold_state.fade <= 0.0f) {
+                inst->hold_state.fade = 0.0f;
+                if (inst->hold_state.fade_dir == -1) inst->hold_state.active = 0;
+            }
+        }
+
         inst->capture.write_pos = (wp + 1) % CAPTURE_SAMPLES;
 
         /* 3. Advance LFO phase (once per sample, before grain loop) */
@@ -1564,24 +1585,36 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
             wet_r *= inst->crossfade_level;
         }
 
-        /* 5c. Hold/Freeze overlay */
-        if (inst->hold_state.active) {
-            float hold_l = inst->hold_state.buffer[inst->hold_state.read_pos].l;
-            float hold_r = inst->hold_state.buffer[inst->hold_state.read_pos].r;
-            inst->hold_state.read_pos = (inst->hold_state.read_pos + 1) % inst->hold_state.length;
+        /* 5c. Shape LFO modulation — modulates wet signal volume rhythmically */
+        if (inst->shape < 1.0f) {
+            float shape_lfo_val;
+            float phase = inst->shape_lfo_phase;
 
-            /* Crossfade between wet and hold */
-            float fade = inst->hold_state.fade;
-            wet_l = wet_l * (1.0f - fade) + hold_l * fade;
-            wet_r = wet_r * (1.0f - fade) + hold_r * fade;
-
-            /* Advance fade (~50ms = 2205 samples) */
-            inst->hold_state.fade += (float)inst->hold_state.fade_dir / 2205.0f;
-            if (inst->hold_state.fade > 1.0f) inst->hold_state.fade = 1.0f;
-            if (inst->hold_state.fade <= 0.0f) {
-                inst->hold_state.fade = 0.0f;
-                if (inst->hold_state.fade_dir == -1) inst->hold_state.active = 0;
+            if (inst->shape < 0.25f) {
+                /* Zone 1: Square wave — on/off gating */
+                shape_lfo_val = (phase < 0.5f) ? 1.0f : 0.0f;
+            } else if (inst->shape < 0.50f) {
+                /* Zone 2: Ramp — gradual rise, abrupt cut */
+                shape_lfo_val = phase;
+            } else if (inst->shape < 0.75f) {
+                /* Zone 3: Triangle — smooth fade in and out */
+                shape_lfo_val = (phase < 0.5f) ? (phase * 2.0f) : (2.0f - phase * 2.0f);
+            } else {
+                /* Zone 4: Saw — abrupt rise, gradual fall */
+                shape_lfo_val = 1.0f - phase;
             }
+
+            /* Modulation depth based on position within zone */
+            float zone_pos = fmodf(inst->shape * 4.0f, 1.0f);
+            float mod_depth = 0.3f + 0.7f * (1.0f - fabsf(zone_pos - 0.5f) * 2.0f);
+
+            float shape_mod = 1.0f - mod_depth * (1.0f - shape_lfo_val);
+            wet_l *= shape_mod;
+            wet_r *= shape_mod;
+
+            /* Advance shape LFO — 1 cycle per subdivision */
+            inst->shape_lfo_phase += 1.0f / (float)inst->subdivision_samples;
+            if (inst->shape_lfo_phase >= 1.0f) inst->shape_lfo_phase -= 1.0f;
         }
 
         /* 6. SVF lowpass filter on wet signal */
@@ -1779,7 +1812,7 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
             "{\"key\":\"pitch_mod_depth\",\"name\":\"Pitch Depth\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"pitch_mod_rate\",\"name\":\"Pitch Rate\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"filter_res\",\"name\":\"Resonance\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
-            "{\"key\":\"reverb_mode\",\"name\":\"Reverb Mode\",\"type\":\"enum\",\"options\":[\"Room\",\"Plate\",\"Hall\",\"Ambient\"]},"
+            "{\"key\":\"reverb_mode\",\"name\":\"Reverb Mode\",\"type\":\"enum\",\"options\":[\"Bright\",\"Dark\",\"Hall\",\"Ambient\"]},"
             "{\"key\":\"reverse\",\"name\":\"Reverse\",\"type\":\"enum\",\"options\":[\"Off\",\"On\"]},"
             "{\"key\":\"hold\",\"name\":\"Hold\",\"type\":\"enum\",\"options\":[\"Off\",\"On\"]}"
             "]");

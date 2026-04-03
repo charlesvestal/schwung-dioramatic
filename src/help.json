@@ -4,7 +4,7 @@
     "variation": "Algorithm variation (A/B/C/D) — changes internal routing and behavior",
     "activity": "Algorithm-specific macro — generally more or less of what the effect does",
     "repeats": "Algorithm-specific macro — generally controls sustain and tail length",
-    "shape": "Grain envelope shape — Ramp / Square / Triangle / Random zones",
+    "shape": "Modulation waveform — Square / Ramp / Triangle / Saw zones",
     "filter": "Lowpass filter cutoff (fully CW = wide open)",
     "mix": "Dry/wet crossfade",
     "space": "Stereo reverb send amount",
@@ -12,8 +12,8 @@
     "pitch_mod_depth": "LFO pitch modulation depth",
     "pitch_mod_rate": "LFO pitch modulation rate",
     "filter_res": "Lowpass filter resonance",
-    "reverb_mode": "Reverb character (Room / Plate / Hall / Ambient)",
+    "reverb_mode": "Reverb character (Bright / Dark / Hall / Ambient)",
     "reverse": "Reverse grain/delay playback direction",
-    "hold": "Freeze current wet output and loop indefinitely"
+    "hold": "Freeze input and re-process through active effects for evolving textures"
   }
 }
