@@ -14,6 +14,70 @@
 #include "audio_fx_api_v2.h"
 
 /* ============================================================================
+ * Audio and grain engine constants
+ * ============================================================================ */
+
+#define SAMPLE_RATE 44100
+#define CAPTURE_SECONDS 2
+#define CAPTURE_SAMPLES (SAMPLE_RATE * CAPTURE_SECONDS)  /* 88200 */
+#define MAX_GRAINS 32
+#define ENV_TABLE_SIZE 256
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+/* ============================================================================
+ * Time division multipliers
+ * ============================================================================ */
+
+static const float time_div_multipliers[6] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
+
+/* ============================================================================
+ * RNG (linear congruential)
+ * ============================================================================ */
+
+static inline uint32_t rng_next(uint32_t *state) {
+    *state = *state * 1664525u + 1013904223u;
+    return *state;
+}
+
+static inline float rng_float(uint32_t *state) {
+    return (float)(rng_next(state) >> 8) / 16777216.0f;
+}
+
+/* ============================================================================
+ * Capture buffer
+ * ============================================================================ */
+
+typedef struct {
+    float l, r;
+} stereo_sample_t;
+
+typedef struct {
+    stereo_sample_t buffer[CAPTURE_SAMPLES];
+    int write_pos;
+} capture_buffer_t;
+
+/* ============================================================================
+ * Grain
+ * ============================================================================ */
+
+typedef struct {
+    int active;
+    int start;              /* position in capture buffer */
+    int length;             /* grain duration in samples */
+    float position;         /* fractional read position */
+    float speed;            /* playback rate */
+    int direction;          /* +1 forward, -1 reverse */
+    float pan;              /* -1.0 to +1.0 */
+    float amplitude;        /* base amplitude */
+    float env_phase;        /* 0.0-1.0 envelope progress */
+    float env_inc;          /* per-sample envelope increment */
+    int env_shape;          /* 0=hann, 1=trapezoid, 2=triangle, 3=rectangle */
+} grain_t;
+
+/* ============================================================================
  * Algorithm and enum definitions
  * ============================================================================ */
 
@@ -62,6 +126,15 @@ typedef struct {
     float pitch_mod_depth;
     float pitch_mod_rate;
     float filter_res;
+
+    /* Grain engine state */
+    capture_buffer_t capture;
+    grain_t grains[MAX_GRAINS];
+    float env_tables[4][ENV_TABLE_SIZE];
+    float bpm;
+    int subdivision_samples;
+    int trigger_counter;
+    uint32_t rng_state;
 } dioramatic_instance_t;
 
 /* ============================================================================
@@ -123,6 +196,133 @@ static int find_enum_index(const char *val, const char **names, int count) {
 }
 
 /* ============================================================================
+ * Envelope table initialization
+ * ============================================================================ */
+
+static void init_envelope_tables(float tables[4][ENV_TABLE_SIZE]) {
+    for (int i = 0; i < ENV_TABLE_SIZE; i++) {
+        float t = (float)i / (float)(ENV_TABLE_SIZE - 1);
+
+        /* 0: Hann window */
+        tables[0][i] = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * t));
+
+        /* 1: Trapezoid - 10% attack, 80% sustain, 10% release */
+        if (t < 0.1f)
+            tables[1][i] = t / 0.1f;
+        else if (t < 0.9f)
+            tables[1][i] = 1.0f;
+        else
+            tables[1][i] = (1.0f - t) / 0.1f;
+
+        /* 2: Triangle */
+        if (t < 0.5f)
+            tables[2][i] = t * 2.0f;
+        else
+            tables[2][i] = (1.0f - t) * 2.0f;
+
+        /* 3: Rectangle with 4-sample fade at edges */
+        if (i < 4)
+            tables[3][i] = (float)(i + 1) / 4.0f;
+        else if (i >= ENV_TABLE_SIZE - 4)
+            tables[3][i] = (float)(ENV_TABLE_SIZE - i) / 4.0f;
+        else
+            tables[3][i] = 1.0f;
+    }
+}
+
+/* ============================================================================
+ * Subdivision calculation
+ * ============================================================================ */
+
+static void recalculate_subdivision(dioramatic_instance_t *inst) {
+    float mult = time_div_multipliers[inst->time_div];
+    int sub = (int)(60.0f / inst->bpm * (float)SAMPLE_RATE * mult);
+    /* Clamp: 10ms minimum, 2s maximum */
+    if (sub < 441) sub = 441;
+    if (sub > CAPTURE_SAMPLES - 1) sub = CAPTURE_SAMPLES - 1;
+    inst->subdivision_samples = sub;
+}
+
+/* ============================================================================
+ * Mosaic algorithm - grain trigger
+ * ============================================================================ */
+
+static void mosaic_trigger_grain(dioramatic_instance_t *inst) {
+    /* Find a free grain slot */
+    grain_t *g = NULL;
+    for (int i = 0; i < MAX_GRAINS; i++) {
+        if (!inst->grains[i].active) {
+            g = &inst->grains[i];
+            break;
+        }
+    }
+    if (!g) return;  /* No free slots */
+
+    int sub = inst->subdivision_samples;
+    int wp = inst->capture.write_pos;
+
+    g->active = 1;
+    g->start = (wp - (int)(rng_float(&inst->rng_state) * (float)sub) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+    g->length = sub;
+    g->env_inc = 1.0f / (float)g->length;
+    g->env_phase = 0.0f;
+    g->position = 0.0f;
+    g->direction = inst->reverse ? -1 : 1;
+    g->pan = rng_float(&inst->rng_state) * 1.0f - 0.5f;
+    g->amplitude = 0.3f + inst->repeats * 0.7f;
+
+    /* Envelope shape from Shape knob */
+    if (inst->shape < 0.25f)
+        g->env_shape = 0;
+    else if (inst->shape < 0.50f)
+        g->env_shape = 1;
+    else if (inst->shape < 0.75f)
+        g->env_shape = 2;
+    else
+        g->env_shape = 3;
+
+    /* Speed per variation */
+    float r = rng_float(&inst->rng_state);
+    switch (inst->variation) {
+        case 0:  /* A: normal + octave up */
+            g->speed = (r < 0.5f) ? 1.0f : 2.0f;
+            break;
+        case 1:  /* B: normal + octave down */
+            g->speed = (r < 0.5f) ? 0.5f : 1.0f;
+            break;
+        case 2:  /* C: all octave up */
+            g->speed = 2.0f;
+            break;
+        case 3:  /* D: full range */
+        default: {
+            int choice = (int)(r * 4.0f);
+            if (choice > 3) choice = 3;
+            static const float speeds[4] = {0.5f, 1.0f, 2.0f, 4.0f};
+            g->speed = speeds[choice];
+            break;
+        }
+    }
+}
+
+/* ============================================================================
+ * Algorithm tick (called per sample)
+ * ============================================================================ */
+
+static void algorithm_tick(dioramatic_instance_t *inst) {
+    if (inst->algorithm != 0) return;  /* Only Mosaic for now */
+
+    /* Trigger interval: more frequent with higher activity */
+    int trigger_interval = inst->subdivision_samples / (1 + (int)(inst->activity * 3.0f));
+    if (trigger_interval < 1) trigger_interval = 1;
+
+    inst->trigger_counter++;
+    if (inst->trigger_counter >= trigger_interval) {
+        inst->trigger_counter = 0;
+        mosaic_trigger_grain(inst);
+    }
+}
+
+/* ============================================================================
  * v2 API implementation
  * ============================================================================ */
 
@@ -147,8 +347,14 @@ static void *v2_create_instance(const char *module_dir, const char *config_json)
     inst->reverse = 0;          /* Off */
     inst->hold = 0;             /* Off */
 
+    /* Grain engine defaults */
+    inst->bpm = 120.0f;
+    inst->rng_state = 12345;
+    init_envelope_tables(inst->env_tables);
+    recalculate_subdivision(inst);
+
     if (g_host && g_host->log) {
-        g_host->log("dioramatic: instance created (passthrough)");
+        g_host->log("dioramatic: instance created");
     }
     return inst;
 }
@@ -163,10 +369,84 @@ static void v2_destroy_instance(void *instance) {
 }
 
 static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
-    /* Passthrough — audio passes through unchanged */
-    (void)instance;
-    (void)audio_inout;
-    (void)frames;
+    if (!instance || !audio_inout) return;
+    dioramatic_instance_t *inst = (dioramatic_instance_t *)instance;
+
+    /* Update tempo from host */
+    if (g_host && g_host->get_bpm) {
+        float bpm = g_host->get_bpm();
+        if (bpm > 0.0f) inst->bpm = bpm;
+    }
+    recalculate_subdivision(inst);
+
+    for (int i = 0; i < frames; i++) {
+        /* 1. Read input, convert to float */
+        float dry_l = (float)audio_inout[i * 2] / 32768.0f;
+        float dry_r = (float)audio_inout[i * 2 + 1] / 32768.0f;
+
+        /* 2. Write to capture buffer */
+        int wp = inst->capture.write_pos;
+        inst->capture.buffer[wp].l = dry_l;
+        inst->capture.buffer[wp].r = dry_r;
+        inst->capture.write_pos = (wp + 1) % CAPTURE_SAMPLES;
+
+        /* 3. Algorithm tick (may trigger new grains) */
+        algorithm_tick(inst);
+
+        /* 4. Accumulate all active grains */
+        float wet_l = 0.0f, wet_r = 0.0f;
+        for (int g = 0; g < MAX_GRAINS; g++) {
+            grain_t *gr = &inst->grains[g];
+            if (!gr->active) continue;
+
+            /* Buffer index with linear interpolation */
+            int base_idx = gr->start + (int)gr->position;
+            /* Wrap for both forward and reverse */
+            int idx0 = ((base_idx % CAPTURE_SAMPLES) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+            int idx1 = (idx0 + 1) % CAPTURE_SAMPLES;
+            float frac = gr->position - floorf(gr->position);
+
+            float samp_l = inst->capture.buffer[idx0].l * (1.0f - frac)
+                         + inst->capture.buffer[idx1].l * frac;
+            float samp_r = inst->capture.buffer[idx0].r * (1.0f - frac)
+                         + inst->capture.buffer[idx1].r * frac;
+
+            /* Envelope lookup */
+            int env_idx = (int)(gr->env_phase * (float)(ENV_TABLE_SIZE - 1));
+            if (env_idx > ENV_TABLE_SIZE - 1) env_idx = ENV_TABLE_SIZE - 1;
+            float env = inst->env_tables[gr->env_shape][env_idx];
+
+            /* Equal-power pan */
+            float pan_angle = (gr->pan + 1.0f) * (float)M_PI * 0.25f;
+            float pan_l = cosf(pan_angle);
+            float pan_r = sinf(pan_angle);
+
+            float amp = gr->amplitude * env;
+            wet_l += samp_l * amp * pan_l;
+            wet_r += samp_r * amp * pan_r;
+
+            /* Advance grain */
+            gr->position += gr->speed * (float)gr->direction;
+            gr->env_phase += gr->env_inc;
+
+            if (gr->env_phase >= 1.0f) {
+                gr->active = 0;
+            }
+        }
+
+        /* 5. Mix dry/wet */
+        float out_l = dry_l * (1.0f - inst->mix) + wet_l * inst->mix;
+        float out_r = dry_r * (1.0f - inst->mix) + wet_r * inst->mix;
+
+        /* 6. Soft clip and convert back to int16 */
+        if (out_l > 1.0f) out_l = 1.0f;
+        else if (out_l < -1.0f) out_l = -1.0f;
+        if (out_r > 1.0f) out_r = 1.0f;
+        else if (out_r < -1.0f) out_r = -1.0f;
+
+        audio_inout[i * 2]     = (int16_t)(out_l * 32767.0f);
+        audio_inout[i * 2 + 1] = (int16_t)(out_r * 32767.0f);
+    }
 }
 
 static void v2_set_param(void *instance, const char *key, const char *val) {
