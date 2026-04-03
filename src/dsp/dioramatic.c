@@ -2,7 +2,7 @@
  * Dioramatic Audio FX Plugin
  *
  * Granular effects processor with 11 algorithms.
- * Currently a passthrough stub — DSP processing to be added.
+ * Algorithms 0-8: grain engine. Algorithms 9-10: multi-tap delay engine.
  */
 
 #include <stdio.h>
@@ -78,6 +78,55 @@ typedef struct {
     float env_inc;          /* per-sample envelope increment */
     int env_shape;          /* 0=hann, 1=trapezoid, 2=triangle, 3=rectangle */
 } grain_t;
+
+/* ============================================================================
+ * Delay engine (for algorithms 9-10: Pattern, Warp)
+ * ============================================================================ */
+
+#define DELAY_BUFFER_SAMPLES 88200  /* 2 seconds at 44100 */
+#define MAX_DELAY_TAPS 8
+
+typedef struct {
+    int delay_samples;    /* tap delay time */
+    float feedback;       /* per-tap feedback */
+    float level;          /* per-tap output level */
+    float lp_state_l;     /* per-tap lowpass filter state L */
+    float lp_state_r;     /* per-tap lowpass filter state R */
+    float lp_coeff;       /* lowpass coefficient (0=bypass, higher=more filtering) */
+    float speed;          /* pitch shift (1.0 = normal, for Warp) */
+} delay_tap_t;
+
+typedef struct {
+    stereo_sample_t buffer[DELAY_BUFFER_SAMPLES];
+    int write_pos;
+    delay_tap_t taps[MAX_DELAY_TAPS];
+    int active_taps;
+} delay_engine_t;
+
+/* Pattern tap ratios: fractions of subdivision time */
+static const float pattern_tap_ratios[4][MAX_DELAY_TAPS] = {
+    /* A: Linear evenly spaced */
+    {0.125f, 0.250f, 0.375f, 0.500f, 0.625f, 0.750f, 0.875f, 1.000f},
+    /* B: Dotted/syncopated */
+    {0.167f, 0.333f, 0.500f, 0.667f, 0.833f, 1.000f, 1.167f, 1.333f},
+    /* C: Triplet-based */
+    {0.333f, 0.667f, 1.000f, 1.333f, 1.667f, 2.000f, 2.333f, 2.667f},
+    /* D: Irregular/complex */
+    {0.125f, 0.375f, 0.500f, 0.625f, 1.000f, 1.125f, 1.500f, 2.000f},
+};
+
+/* ============================================================================
+ * Hold/Freeze state
+ * ============================================================================ */
+
+typedef struct {
+    stereo_sample_t buffer[CAPTURE_SAMPLES];
+    int length;          /* captured length */
+    int read_pos;        /* current playback position */
+    int active;          /* currently holding */
+    float fade;          /* crossfade state 0-1 */
+    int fade_dir;        /* +1 fading in, -1 fading out */
+} hold_state_t;
 
 /* ============================================================================
  * Algorithm and enum definitions
@@ -231,6 +280,30 @@ typedef struct {
     int arp_step;
     int arp_step_timer;
     int arp_cycle;
+
+    /* Delay engine (algorithms 9-10) */
+    delay_engine_t delay;
+    int delay_taps_dirty;        /* reconfigure taps when params change */
+    int delay_prev_algorithm;
+    int delay_prev_variation;
+    float delay_prev_activity;
+    float delay_prev_repeats;
+    int delay_prev_subdivision;
+
+    /* Hold/Freeze */
+    hold_state_t hold_state;
+    int hold_prev;               /* previous hold param value for edge detection */
+
+    /* Algorithm crossfade */
+    int crossfade_active;
+    int crossfade_counter;
+    float crossfade_level;       /* 1.0 -> 0.0 (fade out old) then 0.0 -> 1.0 (fade in new) */
+    int pending_algorithm;
+    int pending_variation;
+
+    /* MIDI clock */
+    uint32_t midi_clock_tick_count;
+    uint32_t midi_clock_sample_counter;  /* samples since last clock reset */
 } dioramatic_instance_t;
 
 /* ============================================================================
@@ -920,7 +993,7 @@ static void blocks_tick(dioramatic_instance_t *inst) {
             }
             case 1: { /* B: Random bursts — probabilistic */
                 prob = 0.2f + inst->activity * 0.8f;
-                grain_len = sub / 4 + (int)(rng_float(&inst->rng_state) * (float)(sub / 4));
+                grain_len = sub / 4 + (int)(rng_float(&inst->rng_state) * ((float)sub / 4.0f));
                 if (grain_len < 64) grain_len = 64;
                 if (rng_float(&inst->rng_state) < prob) {
                     grain_t *g = find_free_grain(inst);
@@ -932,7 +1005,7 @@ static void blocks_tick(dioramatic_instance_t *inst) {
             }
             case 2: { /* C: Pitch-shifted bursts */
                 prob = 0.2f + inst->activity * 0.8f;
-                grain_len = sub / 4 + (int)(rng_float(&inst->rng_state) * (float)(sub / 4));
+                grain_len = sub / 4 + (int)(rng_float(&inst->rng_state) * ((float)sub / 4.0f));
                 if (grain_len < 64) grain_len = 64;
                 if (rng_float(&inst->rng_state) < prob) {
                     static const float block_speeds[4] = {0.5f, 1.0f, 1.5f, 2.0f};
@@ -952,9 +1025,9 @@ static void blocks_tick(dioramatic_instance_t *inst) {
                     for (int c = 0; c < count; c++) {
                         grain_t *g = find_free_grain(inst);
                         if (g) {
-                            grain_len = sub / 8 + (int)(rng_float(&inst->rng_state) * (float)(sub / 8));
+                            grain_len = sub / 8 + (int)(rng_float(&inst->rng_state) * ((float)sub / 8.0f));
                             if (grain_len < 64) grain_len = 64;
-                            int s = (start + (int)(rng_float(&inst->rng_state) * (float)(sub / 2)) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                            int s = (start + (int)(rng_float(&inst->rng_state) * ((float)sub / 2.0f)) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
                             init_grain_common(g, inst, s, grain_len, 1.0f);
                             g->amplitude *= 0.3f + rng_float(&inst->rng_state) * 0.7f;
                         }
@@ -1107,6 +1180,101 @@ static void arp_tick(dioramatic_instance_t *inst) {
 }
 
 /* ============================================================================
+ * Delay engine tap configuration (algorithms 9-10)
+ * ============================================================================ */
+
+static void pattern_configure_taps(dioramatic_instance_t *inst) {
+    delay_engine_t *de = &inst->delay;
+    int sub = inst->subdivision_samples;
+    int var = inst->variation;
+
+    de->active_taps = 1 + (int)(inst->activity * 7.0f);
+    if (de->active_taps > MAX_DELAY_TAPS) de->active_taps = MAX_DELAY_TAPS;
+
+    float feedback = inst->repeats * 0.85f;
+
+    for (int t = 0; t < de->active_taps; t++) {
+        delay_tap_t *tap = &de->taps[t];
+        int delay_samp = (int)(pattern_tap_ratios[var][t] * (float)sub);
+        if (delay_samp < 1) delay_samp = 1;
+        if (delay_samp > DELAY_BUFFER_SAMPLES - 1) delay_samp = DELAY_BUFFER_SAMPLES - 1;
+        tap->delay_samples = delay_samp;
+        tap->feedback = feedback;
+        tap->level = 1.0f / (1.0f + (float)t * 0.3f);
+        tap->lp_coeff = 0.0f;
+        tap->speed = 1.0f;
+    }
+}
+
+static void warp_configure_taps(dioramatic_instance_t *inst) {
+    delay_engine_t *de = &inst->delay;
+    int sub = inst->subdivision_samples;
+    int var = inst->variation;
+
+    de->active_taps = 1 + (int)(inst->activity * 7.0f);
+    if (de->active_taps > MAX_DELAY_TAPS) de->active_taps = MAX_DELAY_TAPS;
+
+    float feedback = inst->repeats * 0.85f;
+
+    for (int t = 0; t < de->active_taps; t++) {
+        delay_tap_t *tap = &de->taps[t];
+        /* Use Pattern A spacing as base */
+        int delay_samp = (int)(pattern_tap_ratios[0][t] * (float)sub);
+        if (delay_samp < 1) delay_samp = 1;
+        if (delay_samp > DELAY_BUFFER_SAMPLES - 1) delay_samp = DELAY_BUFFER_SAMPLES - 1;
+        tap->delay_samples = delay_samp;
+        tap->feedback = feedback;
+        tap->level = 1.0f / (1.0f + (float)t * 0.3f);
+        tap->lp_coeff = 0.0f;
+        tap->speed = 1.0f;
+
+        switch (var) {
+            case 0: /* A: Ascending pitch per tap */
+                tap->speed = powf(2.0f, inst->activity * 2.0f * (float)t / 12.0f);
+                break;
+            case 1: /* B: Progressive LP filtering */
+                tap->lp_coeff = 0.1f + (float)t * inst->activity * 0.1f;
+                if (tap->lp_coeff > 0.99f) tap->lp_coeff = 0.99f;
+                break;
+            case 2: /* C: Combined pitch + filter */
+                tap->speed = powf(2.0f, inst->activity * 2.0f * (float)t / 12.0f);
+                tap->lp_coeff = 0.1f + (float)t * inst->activity * 0.1f;
+                if (tap->lp_coeff > 0.99f) tap->lp_coeff = 0.99f;
+                break;
+            case 3: /* D: Reverse read (negative speed marker, handled in processing) */
+                tap->speed = -1.0f;
+                break;
+        }
+    }
+}
+
+static void delay_configure_taps_if_dirty(dioramatic_instance_t *inst) {
+    if (inst->algorithm < 9) return;
+
+    /* Check if any relevant parameters changed */
+    if (inst->algorithm != inst->delay_prev_algorithm ||
+        inst->variation != inst->delay_prev_variation ||
+        inst->activity != inst->delay_prev_activity ||
+        inst->repeats != inst->delay_prev_repeats ||
+        inst->subdivision_samples != inst->delay_prev_subdivision ||
+        inst->delay_taps_dirty) {
+
+        if (inst->algorithm == 9) {
+            pattern_configure_taps(inst);
+        } else {
+            warp_configure_taps(inst);
+        }
+
+        inst->delay_prev_algorithm = inst->algorithm;
+        inst->delay_prev_variation = inst->variation;
+        inst->delay_prev_activity = inst->activity;
+        inst->delay_prev_repeats = inst->repeats;
+        inst->delay_prev_subdivision = inst->subdivision_samples;
+        inst->delay_taps_dirty = 0;
+    }
+}
+
+/* ============================================================================
  * Algorithm tick dispatcher (called per sample)
  * ============================================================================ */
 
@@ -1160,6 +1328,19 @@ static void *v2_create_instance(const char *module_dir, const char *config_json)
     /* Initialize algorithm state */
     for (int i = 0; i < 8; i++) inst->seq_order[i] = i;
 
+    /* Initialize delay engine */
+    inst->delay_taps_dirty = 1;
+    inst->delay_prev_algorithm = -1;
+
+    /* Initialize hold state */
+    inst->hold_prev = 0;
+
+    /* Initialize crossfade */
+    inst->crossfade_active = 0;
+    inst->crossfade_level = 1.0f;
+    inst->pending_algorithm = 0;
+    inst->pending_variation = 0;
+
     /* Initialize SVF coefficients */
     inst->svf_cached_filter = -1.0f;  /* force first update */
     svf_update_coefficients(inst);
@@ -1196,6 +1377,37 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         svf_update_coefficients(inst);
     }
 
+    /* Configure delay taps if needed (algorithms 9-10) */
+    delay_configure_taps_if_dirty(inst);
+
+    /* Handle crossfade midpoint switch */
+    /* (crossfade_level goes from 1.0 down to 0.0, then the pending params
+       are applied and it goes back up to 1.0) */
+
+    /* Handle hold edge detection */
+    if (inst->hold != inst->hold_prev) {
+        if (inst->hold == 1 && inst->hold_prev == 0) {
+            /* Hold turned ON: capture recent audio into hold buffer */
+            int len = inst->subdivision_samples;
+            if (len > CAPTURE_SAMPLES) len = CAPTURE_SAMPLES;
+            if (len < 64) len = 64;
+            inst->hold_state.length = len;
+            int cap_wp = inst->capture.write_pos;
+            for (int h = 0; h < len; h++) {
+                int src = (cap_wp - len + h + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                inst->hold_state.buffer[h] = inst->capture.buffer[src];
+            }
+            inst->hold_state.read_pos = 0;
+            inst->hold_state.active = 1;
+            inst->hold_state.fade = 0.0f;
+            inst->hold_state.fade_dir = 1;
+        } else if (inst->hold == 0 && inst->hold_prev == 1) {
+            /* Hold turned OFF: start fade-out */
+            inst->hold_state.fade_dir = -1;
+        }
+        inst->hold_prev = inst->hold;
+    }
+
     /* Precompute LFO rate for this block */
     float lfo_rate_hz = 0.1f + inst->pitch_mod_rate * 9.9f;
     float lfo_phase_inc = lfo_rate_hz / (float)SAMPLE_RATE;
@@ -1224,49 +1436,151 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         /* 4. Algorithm tick (may trigger new grains) */
         algorithm_tick(inst);
 
-        /* 5. Accumulate all active grains (with pitch modulation) */
+        /* 5. Accumulate wet signal — delay engine or grain engine */
         float wet_l = 0.0f, wet_r = 0.0f;
-        for (int g = 0; g < MAX_GRAINS; g++) {
-            grain_t *gr = &inst->grains[g];
-            if (!gr->active) continue;
 
-            /* Buffer index with linear interpolation */
-            int base_idx = gr->start + (int)gr->position;
-            /* Wrap for both forward and reverse */
-            int idx0 = ((base_idx % CAPTURE_SAMPLES) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-            int idx1 = (idx0 + 1) % CAPTURE_SAMPLES;
-            float frac = gr->position - floorf(gr->position);
+        if (inst->algorithm >= 9) {
+            /* ---- Delay engine path (Pattern / Warp) ---- */
+            delay_engine_t *de = &inst->delay;
 
-            float samp_l = inst->capture.buffer[idx0].l * (1.0f - frac)
-                         + inst->capture.buffer[idx1].l * frac;
-            float samp_r = inst->capture.buffer[idx0].r * (1.0f - frac)
-                         + inst->capture.buffer[idx1].r * frac;
+            /* Write input + feedback to delay buffer */
+            float fb_l = 0.0f, fb_r = 0.0f;
+            for (int t = 0; t < de->active_taps; t++) {
+                delay_tap_t *tap = &de->taps[t];
+                int rp = (de->write_pos - tap->delay_samples + DELAY_BUFFER_SAMPLES) % DELAY_BUFFER_SAMPLES;
+                fb_l += de->buffer[rp].l * tap->feedback * tap->level;
+                fb_r += de->buffer[rp].r * tap->feedback * tap->level;
+            }
+            de->buffer[de->write_pos].l = dry_l + fb_l * 0.5f;
+            de->buffer[de->write_pos].r = dry_r + fb_r * 0.5f;
 
-            /* Envelope lookup */
-            int env_idx = (int)(gr->env_phase * (float)(ENV_TABLE_SIZE - 1));
-            if (env_idx > ENV_TABLE_SIZE - 1) env_idx = ENV_TABLE_SIZE - 1;
-            float env = inst->env_tables[gr->env_shape][env_idx];
+            /* Read from taps */
+            for (int t = 0; t < de->active_taps; t++) {
+                delay_tap_t *tap = &de->taps[t];
+                int rp;
 
-            /* Equal-power pan */
-            float pan_angle = (gr->pan + 1.0f) * (float)M_PI * 0.25f;
-            float pan_l = cosf(pan_angle);
-            float pan_r = sinf(pan_angle);
+                if (tap->speed < 0.0f) {
+                    /* Warp variation D: reverse read — read forward from tap position */
+                    rp = (de->write_pos - tap->delay_samples + DELAY_BUFFER_SAMPLES) % DELAY_BUFFER_SAMPLES;
+                    /* Reverse: read from the opposite end of the tap window */
+                    rp = (de->write_pos - (tap->delay_samples - (de->write_pos - rp + DELAY_BUFFER_SAMPLES) % DELAY_BUFFER_SAMPLES) + DELAY_BUFFER_SAMPLES) % DELAY_BUFFER_SAMPLES;
+                    /* Simpler: just mirror the read position around the write pos */
+                    int offset = tap->delay_samples;
+                    rp = (de->write_pos + offset) % DELAY_BUFFER_SAMPLES;
+                } else {
+                    rp = (de->write_pos - tap->delay_samples + DELAY_BUFFER_SAMPLES) % DELAY_BUFFER_SAMPLES;
+                }
 
-            float amp = gr->amplitude * env;
-            wet_l += samp_l * amp * pan_l;
-            wet_r += samp_r * amp * pan_r;
+                float tap_l = de->buffer[rp].l * tap->level;
+                float tap_r = de->buffer[rp].r * tap->level;
 
-            /* Glide: lerp speed toward target */
-            if (gr->speed_target != 0.0f) {
-                gr->speed += (gr->speed_target - gr->speed) * gr->speed_glide_rate;
+                /* Per-tap lowpass (one-pole) */
+                if (tap->lp_coeff > 0.001f) {
+                    tap->lp_state_l += tap->lp_coeff * (tap_l - tap->lp_state_l);
+                    tap_l = tap->lp_state_l;
+                    tap->lp_state_r += tap->lp_coeff * (tap_r - tap->lp_state_r);
+                    tap_r = tap->lp_state_r;
+                }
+
+                wet_l += tap_l;
+                wet_r += tap_r;
             }
 
-            /* Advance grain with pitch modulation */
-            gr->position += gr->speed * pitch_mod * (float)gr->direction;
-            gr->env_phase += gr->env_inc;
+            de->write_pos = (de->write_pos + 1) % DELAY_BUFFER_SAMPLES;
+        } else {
+            /* ---- Grain engine path (algorithms 0-8) ---- */
+            for (int g = 0; g < MAX_GRAINS; g++) {
+                grain_t *gr = &inst->grains[g];
+                if (!gr->active) continue;
 
-            if (gr->env_phase >= 1.0f) {
-                gr->active = 0;
+                /* Buffer index with linear interpolation */
+                int base_idx = gr->start + (int)gr->position;
+                /* Wrap for both forward and reverse */
+                int idx0 = ((base_idx % CAPTURE_SAMPLES) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                int idx1 = (idx0 + 1) % CAPTURE_SAMPLES;
+                float frac = gr->position - floorf(gr->position);
+
+                float samp_l = inst->capture.buffer[idx0].l * (1.0f - frac)
+                             + inst->capture.buffer[idx1].l * frac;
+                float samp_r = inst->capture.buffer[idx0].r * (1.0f - frac)
+                             + inst->capture.buffer[idx1].r * frac;
+
+                /* Envelope lookup */
+                int env_idx = (int)(gr->env_phase * (float)(ENV_TABLE_SIZE - 1));
+                if (env_idx > ENV_TABLE_SIZE - 1) env_idx = ENV_TABLE_SIZE - 1;
+                float env = inst->env_tables[gr->env_shape][env_idx];
+
+                /* Equal-power pan */
+                float pan_angle = (gr->pan + 1.0f) * (float)M_PI * 0.25f;
+                float pan_l = cosf(pan_angle);
+                float pan_r = sinf(pan_angle);
+
+                float amp = gr->amplitude * env;
+                wet_l += samp_l * amp * pan_l;
+                wet_r += samp_r * amp * pan_r;
+
+                /* Glide: lerp speed toward target */
+                if (gr->speed_target != 0.0f) {
+                    gr->speed += (gr->speed_target - gr->speed) * gr->speed_glide_rate;
+                }
+
+                /* Advance grain with pitch modulation */
+                gr->position += gr->speed * pitch_mod * (float)gr->direction;
+                gr->env_phase += gr->env_inc;
+
+                if (gr->env_phase >= 1.0f) {
+                    gr->active = 0;
+                }
+            }
+        }
+
+        /* 5b. Algorithm crossfade envelope */
+        if (inst->crossfade_active) {
+            #define CROSSFADE_HALF_SAMPLES 1102  /* ~25ms at 44100 */
+            inst->crossfade_counter++;
+            if (inst->crossfade_counter <= CROSSFADE_HALF_SAMPLES) {
+                /* Fading out old algorithm */
+                inst->crossfade_level = 1.0f - (float)inst->crossfade_counter / (float)CROSSFADE_HALF_SAMPLES;
+            } else if (inst->crossfade_counter == CROSSFADE_HALF_SAMPLES + 1) {
+                /* Midpoint: switch to new algorithm/variation */
+                inst->algorithm = inst->pending_algorithm;
+                inst->variation = inst->pending_variation;
+                /* Clear all grains for clean start */
+                for (int g = 0; g < MAX_GRAINS; g++) inst->grains[g].active = 0;
+                /* Mark delay taps dirty */
+                inst->delay_taps_dirty = 1;
+                delay_configure_taps_if_dirty(inst);
+                inst->crossfade_level = 0.0f;
+            } else {
+                /* Fading in new algorithm */
+                int fade_in_pos = inst->crossfade_counter - CROSSFADE_HALF_SAMPLES - 1;
+                inst->crossfade_level = (float)fade_in_pos / (float)CROSSFADE_HALF_SAMPLES;
+                if (inst->crossfade_level >= 1.0f) {
+                    inst->crossfade_level = 1.0f;
+                    inst->crossfade_active = 0;
+                }
+            }
+            wet_l *= inst->crossfade_level;
+            wet_r *= inst->crossfade_level;
+        }
+
+        /* 5c. Hold/Freeze overlay */
+        if (inst->hold_state.active) {
+            float hold_l = inst->hold_state.buffer[inst->hold_state.read_pos].l;
+            float hold_r = inst->hold_state.buffer[inst->hold_state.read_pos].r;
+            inst->hold_state.read_pos = (inst->hold_state.read_pos + 1) % inst->hold_state.length;
+
+            /* Crossfade between wet and hold */
+            float fade = inst->hold_state.fade;
+            wet_l = wet_l * (1.0f - fade) + hold_l * fade;
+            wet_r = wet_r * (1.0f - fade) + hold_r * fade;
+
+            /* Advance fade (~50ms = 2205 samples) */
+            inst->hold_state.fade += (float)inst->hold_state.fade_dir / 2205.0f;
+            if (inst->hold_state.fade > 1.0f) inst->hold_state.fade = 1.0f;
+            if (inst->hold_state.fade <= 0.0f) {
+                inst->hold_state.fade = 0.0f;
+                if (inst->hold_state.fade_dir == -1) inst->hold_state.active = 0;
             }
         }
 
@@ -1307,10 +1621,24 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
 
     if (strcmp(key, "algorithm") == 0) {
         int idx = find_enum_index(val, algorithm_names, NUM_ALGORITHMS);
-        if (idx >= 0) inst->algorithm = idx;
+        if (idx >= 0 && idx != inst->algorithm) {
+            /* Crossfade to new algorithm */
+            inst->pending_algorithm = idx;
+            inst->pending_variation = inst->variation;
+            inst->crossfade_active = 1;
+            inst->crossfade_counter = 0;
+            inst->crossfade_level = 1.0f;
+        }
     } else if (strcmp(key, "variation") == 0) {
         int idx = find_enum_index(val, variation_names, NUM_VARIATIONS);
-        if (idx >= 0) inst->variation = idx;
+        if (idx >= 0 && idx != inst->variation) {
+            /* Crossfade to new variation */
+            inst->pending_algorithm = inst->algorithm;
+            inst->pending_variation = idx;
+            inst->crossfade_active = 1;
+            inst->crossfade_counter = 0;
+            inst->crossfade_level = 1.0f;
+        }
     } else if (strcmp(key, "activity") == 0) {
         inst->activity = fminf(1.0f, fmaxf(0.0f, (float)atof(val)));
     } else if (strcmp(key, "repeats") == 0) {
@@ -1385,6 +1713,8 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
             int idx = find_enum_index(sv, onoff_names, 2);
             if (idx >= 0) inst->hold = idx;
         }
+        /* Mark delay taps dirty after state restore */
+        inst->delay_taps_dirty = 1;
     }
 }
 
@@ -1465,11 +1795,32 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
 }
 
 static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) {
-    /* No MIDI handling yet */
-    (void)instance;
-    (void)msg;
-    (void)len;
+    if (!instance || !msg || len < 1) return;
+    dioramatic_instance_t *inst = (dioramatic_instance_t *)instance;
+    uint8_t status = msg[0];
+
+    if (status == 0xF8) {
+        /* MIDI timing clock: 24 ppqn */
+        inst->midi_clock_tick_count++;
+        inst->midi_clock_sample_counter += 128; /* approximate: 1 tick per process block */
+
+        /* Every 24 ticks = 1 beat, derive BPM */
+        if (inst->midi_clock_tick_count >= 24) {
+            if (inst->midi_clock_sample_counter > 0) {
+                float beat_seconds = (float)inst->midi_clock_sample_counter / (float)SAMPLE_RATE;
+                float derived_bpm = 60.0f / beat_seconds;
+                /* Sanity check: 30-300 BPM */
+                if (derived_bpm >= 30.0f && derived_bpm <= 300.0f) {
+                    inst->bpm = derived_bpm;
+                }
+            }
+            inst->midi_clock_tick_count = 0;
+            inst->midi_clock_sample_counter = 0;
+        }
+    }
+
     (void)source;
+    (void)len;
 }
 
 /* ============================================================================
