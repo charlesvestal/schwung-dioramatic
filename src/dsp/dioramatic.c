@@ -538,7 +538,7 @@ static void init_grain_common(grain_t *g, dioramatic_instance_t *inst, int start
     g->direction = inst->reverse ? -1 : 1;
     g->env_shape = 0;  /* Always Hann — Shape knob controls LFO modulation instead */
     g->pan = rng_float(&inst->rng_state) - 0.5f;
-    g->amplitude = 0.3f + inst->repeats * 0.7f;
+    g->amplitude = 0.5f + inst->repeats * 0.5f;
     g->speed = speed;
     g->speed_target = 0.0f;
     g->speed_glide_rate = 0.0f;
@@ -1518,6 +1518,11 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
                 wet_r += tap_r;
             }
 
+            /* Scale delay output to prevent buildup with many taps */
+            float tap_scale = 1.0f / (1.0f + (float)de->active_taps * 0.15f);
+            wet_l *= tap_scale;
+            wet_r *= tap_scale;
+
             de->write_pos = (de->write_pos + 1) % DELAY_BUFFER_SAMPLES;
         } else {
             /* ---- Grain engine path (algorithms 0-8) ---- */
@@ -1597,7 +1602,7 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         }
 
         /* 5c. Shape LFO modulation — modulates wet signal volume rhythmically */
-        if (inst->shape < 1.0f) {
+        if (inst->shape < 0.95f) {
             float shape_lfo_val;
             float phase = inst->shape_lfo_phase;
 
@@ -1615,11 +1620,15 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
                 shape_lfo_val = 1.0f - phase;
             }
 
-            /* Modulation depth based on position within zone */
-            float zone_pos = fmodf(inst->shape * 4.0f, 1.0f);
-            float mod_depth = 0.3f + 0.7f * (1.0f - fabsf(zone_pos - 0.5f) * 2.0f);
+            /* Full-depth modulation — shape knob IS the modulator.
+               At zone center: 100% depth (wet goes to silence at LFO trough).
+               Nearer to 0.95 (off): depth fades out smoothly. */
+            float depth_fade = 1.0f - (inst->shape / 0.95f);  /* 1.0 at shape=0, 0.0 at shape=0.95 */
+            if (depth_fade > 1.0f) depth_fade = 1.0f;
+            float mod_depth = 0.7f + 0.3f * depth_fade;  /* 70-100% depth */
 
             float shape_mod = 1.0f - mod_depth * (1.0f - shape_lfo_val);
+            if (shape_mod < 0.0f) shape_mod = 0.0f;
             wet_l *= shape_mod;
             wet_r *= shape_mod;
 
