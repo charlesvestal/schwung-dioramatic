@@ -585,15 +585,15 @@ static void mosaic_trigger_grain(dioramatic_instance_t *inst) {
         case 0:  /* A: normal + octave up shimmer */
             g->speed = (r < 0.6f) ? 1.0f : 2.0f;  /* bias toward normal */
             break;
-        case 1:  /* B: normal + fifth below (more musical than octave down) */
-            g->speed = (r < 0.5f) ? 1.0f : 0.667f;  /* perfect fifth down */
+        case 1:  /* B: normal + octave down */
+            g->speed = (r < 0.5f) ? 1.0f : 0.5f;
             break;
         case 2:  /* C: octave up */
             g->speed = 2.0f;
             break;
-        case 3:  /* D: musical intervals */
+        case 3:  /* D: octave spread — only octave-aligned ratios stay consonant */
         default: {
-            static const float speeds[5] = {0.667f, 1.0f, 1.0f, 1.5f, 2.0f};
+            static const float speeds[5] = {0.5f, 1.0f, 1.0f, 2.0f, 2.0f};
             int choice = (int)(r * 5.0f);
             if (choice > 4) choice = 4;
             g->speed = speeds[choice];
@@ -750,9 +750,13 @@ static void glide_tick(dioramatic_instance_t *inst) {
                         target_speed = 1.0f - inst->activity * 0.5f;
                     inst->glide_toggle = !inst->glide_toggle;
                     break;
-                case 3: /* D: Random target */
-                    target_speed = 0.5f + rng_float(&inst->rng_state) * 1.5f;
+                case 3: { /* D: Random octave-safe target */
+                    static const float glide_targets[4] = {0.5f, 1.0f, 1.0f, 2.0f};
+                    int gi = (int)(rng_float(&inst->rng_state) * 4.0f);
+                    if (gi > 3) gi = 3;
+                    target_speed = glide_targets[gi];
                     break;
+                }
             }
 
             init_grain_common(g, inst, start, grain_len, start_speed);

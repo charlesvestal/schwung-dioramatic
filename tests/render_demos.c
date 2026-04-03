@@ -454,8 +454,8 @@ int main(void) {
         {"19-ambient-wash",
          "{\"algorithm\":0,\"variation\":3,\"activity\":0.85,\"repeats\":0.85,"
          "\"shape\":1.0,\"filter\":0.55,\"mix\":0.8,\"space\":0.85,"
-         "\"time_div\":4,\"pitch_mod_depth\":0.3,\"pitch_mod_rate\":0.08,"
-         "\"filter_res\":0.25,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+         "\"time_div\":4,\"pitch_mod_depth\":0.1,\"pitch_mod_rate\":0.08,"
+         "\"filter_res\":0.2,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
         {"20-mosaic-A-reverse",
          "{\"algorithm\":0,\"variation\":0,\"activity\":0.6,\"repeats\":0.7,"
