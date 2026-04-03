@@ -172,6 +172,10 @@ typedef struct {
 #define FDN_NUM_AP 4   /* input allpass diffusers */
 #define FDN_AP_MAX 512
 
+/* Shimmer pitch shift buffer — simple granular octave-up in the reverb feedback */
+#define SHIMMER_BUF_SIZE 4096
+#define SHIMMER_GRAIN_SIZE 1024   /* ~23ms grain for smooth pitch shifting */
+
 typedef struct {
     /* Delay lines */
     float lines[FDN_LINES][FDN_MAX_DELAY];
@@ -189,10 +193,20 @@ typedef struct {
     float predelay_buf_r[4096];
     int predelay_pos;
 
-    /* Delay line modulation — slow LFO per line creates chorus-like
-       movement in the reverb tail, making it sound alive and lush
-       rather than static and metallic */
+    /* Delay line modulation for chorus-like movement in the tail */
     float mod_phase[FDN_LINES];
+
+    /* Shimmer: octave-up pitch shift in the feedback path.
+       Two overlapping grains read at 2x speed, crossfaded with Hann window.
+       This is the Eno/Lanois technique — creates cascading harmonics
+       that build up in the reverb tail like a crystal cave. */
+    float shimmer_buf[SHIMMER_BUF_SIZE];
+    int shimmer_write_pos;
+    float shimmer_read_phase_a;  /* grain A read position (fractional) */
+    float shimmer_read_phase_b;  /* grain B read position (offset by half grain) */
+
+    /* High shelf state for sparkle boost */
+    float sparkle_state_l, sparkle_state_r;
 } fdn_reverb_t;
 
 typedef struct {
@@ -514,20 +528,79 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     mixed[2] = 0.5f * ( taps[0] + taps[1] - taps[2] - taps[3]);
     mixed[3] = 0.5f * ( taps[0] - taps[1] - taps[2] + taps[3]);
 
-    /* Apply feedback, damping, and write back with input */
+    /* Shimmer: pitch-shift the mixed feedback up one octave.
+       Two overlapping grains read at 2x speed from a circular buffer,
+       crossfaded with Hann windows for smooth, artifact-free shifting.
+       This creates the cascading crystalline harmonics. */
+    float fb_mono = (mixed[0] + mixed[1] + mixed[2] + mixed[3]) * 0.25f;
+    rev->shimmer_buf[rev->shimmer_write_pos] = fb_mono;
+    rev->shimmer_write_pos = (rev->shimmer_write_pos + 1) & (SHIMMER_BUF_SIZE - 1);
+
+    /* Grain A: read at 2x speed */
+    int rd_a = (int)rev->shimmer_read_phase_a;
+    float frac_a = rev->shimmer_read_phase_a - (float)rd_a;
+    int idx_a0 = rd_a & (SHIMMER_BUF_SIZE - 1);
+    int idx_a1 = (rd_a + 1) & (SHIMMER_BUF_SIZE - 1);
+    float samp_a = rev->shimmer_buf[idx_a0] * (1.0f - frac_a) + rev->shimmer_buf[idx_a1] * frac_a;
+    /* Hann window for grain A based on position within grain cycle */
+    float grain_phase_a = fmodf(rev->shimmer_read_phase_a / (float)SHIMMER_GRAIN_SIZE, 1.0f);
+    float env_a = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * grain_phase_a));
+
+    /* Grain B: offset by half a grain length */
+    float phase_b_offset = (float)(SHIMMER_GRAIN_SIZE / 2);
+    int rd_b = (int)(rev->shimmer_read_phase_a + phase_b_offset);
+    float frac_b = (rev->shimmer_read_phase_a + phase_b_offset) - (float)rd_b;
+    int idx_b0 = rd_b & (SHIMMER_BUF_SIZE - 1);
+    int idx_b1 = (rd_b + 1) & (SHIMMER_BUF_SIZE - 1);
+    float samp_b = rev->shimmer_buf[idx_b0] * (1.0f - frac_b) + rev->shimmer_buf[idx_b1] * frac_b;
+    float grain_phase_b = fmodf((rev->shimmer_read_phase_a + phase_b_offset) / (float)SHIMMER_GRAIN_SIZE, 1.0f);
+    float env_b = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * grain_phase_b));
+
+    float shimmer_out = samp_a * env_a + samp_b * env_b;
+    rev->shimmer_read_phase_a += 2.0f;  /* 2x speed = octave up */
+    /* Keep read phase from drifting too far from write */
+    float dist = (float)rev->shimmer_write_pos - rev->shimmer_read_phase_a;
+    if (dist < 0) dist += (float)SHIMMER_BUF_SIZE;
+    if (dist > (float)(SHIMMER_BUF_SIZE - SHIMMER_GRAIN_SIZE)) {
+        rev->shimmer_read_phase_a = (float)rev->shimmer_write_pos - (float)(SHIMMER_BUF_SIZE / 2);
+        if (rev->shimmer_read_phase_a < 0) rev->shimmer_read_phase_a += (float)SHIMMER_BUF_SIZE;
+    }
+
+    /* Shimmer amount increases with reverb mode: subtle on Bright, heavy on Ambient */
+    static const float shimmer_amounts[4] = {0.08f, 0.12f, 0.18f, 0.30f};
+    float shimmer_level = shimmer_amounts[mode];
+
+    /* Apply feedback, damping, shimmer injection, and write back */
     for (int i = 0; i < FDN_LINES; i++) {
         float fb = mixed[i] * p->feedback;
         /* One-pole lowpass damping */
         rev->lp_state[i] += p->damping * (fb - rev->lp_state[i]);
         fb = rev->lp_state[i];
+        /* Inject shimmer (octave-up) into the feedback path — this is what
+           creates the cascading harmonics building up over the reverb tail */
+        fb += shimmer_out * shimmer_level;
         /* Write with input */
         rev->lines[i][rev->write_pos[i]] = diff_in + fb;
         rev->write_pos[i] = (rev->write_pos[i] + 1) & (FDN_MAX_DELAY - 1);
     }
 
-    /* Stereo output — alternating lines for width, scaled for lush-not-overwhelming */
-    *out_l = (taps[0] + taps[2]) * 0.45f;
-    *out_r = (taps[1] + taps[3]) * 0.45f;
+    /* Raw stereo output from alternating lines */
+    float raw_l = (taps[0] + taps[2]) * 0.45f;
+    float raw_r = (taps[1] + taps[3]) * 0.45f;
+
+    /* High-frequency sparkle shelf: gentle boost to upper harmonics.
+       One-pole highpass extracts HF content, blend it back in for brightness.
+       This creates the "crystal cave" quality — bright reflections without harshness. */
+    float hf_l = raw_l - rev->sparkle_state_l;
+    rev->sparkle_state_l += 0.15f * hf_l;  /* ~1kHz crossover */
+    float hf_r = raw_r - rev->sparkle_state_r;
+    rev->sparkle_state_r += 0.15f * hf_r;
+
+    /* Blend: original + boosted highs (sparkle) */
+    static const float sparkle_amounts[4] = {0.15f, 0.05f, 0.20f, 0.25f};
+    float sparkle = sparkle_amounts[mode];  /* Bright & Hall/Ambient get more sparkle, Dark gets less */
+    *out_l = raw_l + hf_l * sparkle;
+    *out_r = raw_r + hf_r * sparkle;
 }
 
 /* ============================================================================
