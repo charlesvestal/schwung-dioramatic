@@ -198,10 +198,14 @@ typedef struct {
 } reverb_preset_t;
 
 static const reverb_preset_t reverb_presets[4] = {
-    /* Bright */  {{1087, 1283, 1447, 1663}, 0.75f, 0.3f, 0,    {142, 107, 379, 277}},
-    /* Dark */    {{2017, 2389, 2777, 3191}, 0.83f, 0.7f, 441,  {142, 107, 379, 277}},
-    /* Hall */    {{3547, 4177, 4831, 5557}, 0.92f, 0.6f, 882,  {142, 107, 379, 277}},
-    /* Ambient */ {{5501, 6469, 7481, 8179}, 0.97f, 0.7f, 1323, {142, 107, 379, 277}},
+    /* Bright: tight, clear */
+    {{1087, 1283, 1447, 1663}, 0.72f, 0.25f, 0,    {241, 173, 419, 313}},
+    /* Dark: warm, intimate */
+    {{2017, 2389, 2777, 3191}, 0.80f, 0.65f, 331,  {241, 173, 419, 313}},
+    /* Hall: spacious, clear */
+    {{3547, 4177, 4831, 5557}, 0.88f, 0.45f, 661,  {241, 173, 419, 313}},
+    /* Ambient: massive, wash */
+    {{6101, 7103, 7919, 8191}, 0.95f, 0.55f, 1103, {241, 173, 419, 313}},
 };
 
 /* ============================================================================
@@ -474,8 +478,9 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         int len = p->ap_lengths[i];
         int pos = rev->ap_pos[i];
         float delayed = buf[pos];
-        float ap_out = delayed - 0.6f * diff_in;
-        buf[pos] = diff_in + 0.6f * ap_out;
+        float ap_coeff = 0.5f;
+        float ap_out = delayed - ap_coeff * diff_in;
+        buf[pos] = diff_in + ap_coeff * ap_out;
         diff_in = ap_out;
         rev->ap_pos[i] = (pos + 1) % len;
     }
@@ -505,9 +510,9 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         rev->write_pos[i] = (rev->write_pos[i] + 1) & (FDN_MAX_DELAY - 1);
     }
 
-    /* Stereo output from alternating lines */
-    *out_l = taps[0] + taps[2];
-    *out_r = taps[1] + taps[3];
+    /* Stereo output from alternating lines (scaled to prevent hotness) */
+    *out_l = (taps[0] + taps[2]) * 0.35f;
+    *out_r = (taps[1] + taps[3]) * 0.35f;
 }
 
 /* ============================================================================
@@ -537,11 +542,20 @@ static void init_grain_common(grain_t *g, dioramatic_instance_t *inst, int start
     g->position = 0.0f;
     g->direction = inst->reverse ? -1 : 1;
     g->env_shape = 0;  /* Always Hann — Shape knob controls LFO modulation instead */
-    g->pan = rng_float(&inst->rng_state) - 0.5f;
+    g->pan = (rng_float(&inst->rng_state) - 0.5f) * 0.6f;  /* ±0.3 instead of ±0.5 */
     g->amplitude = 0.5f + inst->repeats * 0.5f;
     g->speed = speed;
     g->speed_target = 0.0f;
     g->speed_glide_rate = 0.0f;
+
+    /* Shorten grains for extreme pitch shifts to sound musical rather than "tape slowing down" */
+    if (speed > 1.5f || speed < 0.75f) {
+        float speed_factor = (speed > 1.0f) ? speed : (1.0f / speed);
+        int adjusted = (int)((float)g->length / speed_factor);
+        if (adjusted < 441) adjusted = 441;  /* minimum 10ms */
+        g->length = adjusted;
+        g->env_inc = 1.0f / (float)g->length;
+    }
 }
 
 static int count_active_grains(dioramatic_instance_t *inst) {
@@ -568,20 +582,20 @@ static void mosaic_trigger_grain(dioramatic_instance_t *inst) {
     /* Speed per variation */
     float r = rng_float(&inst->rng_state);
     switch (inst->variation) {
-        case 0:  /* A: normal + octave up */
-            g->speed = (r < 0.5f) ? 1.0f : 2.0f;
+        case 0:  /* A: normal + octave up shimmer */
+            g->speed = (r < 0.6f) ? 1.0f : 2.0f;  /* bias toward normal */
             break;
-        case 1:  /* B: normal + octave down */
-            g->speed = (r < 0.5f) ? 0.5f : 1.0f;
+        case 1:  /* B: normal + fifth below (more musical than octave down) */
+            g->speed = (r < 0.5f) ? 1.0f : 0.667f;  /* perfect fifth down */
             break;
-        case 2:  /* C: all octave up */
+        case 2:  /* C: octave up */
             g->speed = 2.0f;
             break;
-        case 3:  /* D: full range */
+        case 3:  /* D: musical intervals */
         default: {
-            int choice = (int)(r * 4.0f);
-            if (choice > 3) choice = 3;
-            static const float speeds[4] = {0.5f, 1.0f, 2.0f, 4.0f};
+            static const float speeds[5] = {0.667f, 1.0f, 1.0f, 1.5f, 2.0f};
+            int choice = (int)(r * 5.0f);
+            if (choice > 4) choice = 4;
             g->speed = speeds[choice];
             break;
         }
@@ -589,8 +603,10 @@ static void mosaic_trigger_grain(dioramatic_instance_t *inst) {
 }
 
 static void mosaic_tick(dioramatic_instance_t *inst) {
-    int trigger_interval = inst->subdivision_samples / (1 + (int)(inst->activity * 3.0f));
-    if (trigger_interval < 1) trigger_interval = 1;
+    /* More grains, faster triggers, minimum overlap of 4 */
+    int min_grains = 2 + (int)(inst->activity * 6.0f);  /* 2 to 8 */
+    int trigger_interval = inst->subdivision_samples / min_grains;
+    if (trigger_interval < 128) trigger_interval = 128;  /* ~3ms minimum */
 
     inst->trigger_counter++;
     if (inst->trigger_counter >= trigger_interval) {
@@ -790,7 +806,7 @@ static void haze_tick(dioramatic_instance_t *inst) {
         int start = (wp - (int)(rng_float(&inst->rng_state) * (float)spread) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
 
         init_grain_common(g, inst, start, length, speed);
-        g->amplitude = 0.15f + inst->repeats * 0.4f;
+        g->amplitude = 0.25f + inst->repeats * 0.5f;
     }
 }
 
@@ -1001,6 +1017,7 @@ static void blocks_tick(dioramatic_instance_t *inst) {
                     grain_t *g = find_free_grain(inst);
                     if (g) {
                         init_grain_common(g, inst, start, grain_len, 1.0f);
+                        g->amplitude = 0.8f + inst->repeats * 0.2f;
                     }
                 }
                 break;
@@ -1013,6 +1030,7 @@ static void blocks_tick(dioramatic_instance_t *inst) {
                     grain_t *g = find_free_grain(inst);
                     if (g) {
                         init_grain_common(g, inst, start, grain_len, 1.0f);
+                        g->amplitude = 0.8f + inst->repeats * 0.2f;
                     }
                 }
                 break;
@@ -1028,6 +1046,7 @@ static void blocks_tick(dioramatic_instance_t *inst) {
                     grain_t *g = find_free_grain(inst);
                     if (g) {
                         init_grain_common(g, inst, start, grain_len, block_speeds[si]);
+                        g->amplitude = 0.8f + inst->repeats * 0.2f;
                     }
                 }
                 break;
@@ -1043,7 +1062,7 @@ static void blocks_tick(dioramatic_instance_t *inst) {
                             if (grain_len < 64) grain_len = 64;
                             int s = (start + (int)(rng_float(&inst->rng_state) * ((float)sub / 2.0f)) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
                             init_grain_common(g, inst, s, grain_len, 1.0f);
-                            g->amplitude *= 0.3f + rng_float(&inst->rng_state) * 0.7f;
+                            g->amplitude = (0.8f + inst->repeats * 0.2f) * (0.3f + rng_float(&inst->rng_state) * 0.7f);
                         }
                     }
                 }
@@ -1122,7 +1141,9 @@ static void interrupt_tick(dioramatic_instance_t *inst) {
 
 static const float arp_intervals[] = {
     1.0f,       /* unison */
+    1.12246f,   /* major 2nd */
     1.25992f,   /* major 3rd */
+    1.33484f,   /* perfect 4th */
     1.49831f,   /* perfect 5th */
     2.0f,       /* octave */
 };
@@ -1144,23 +1165,28 @@ static void arp_tick(dioramatic_instance_t *inst) {
         int pattern_len = 4;
 
         switch (inst->variation) {
-            case 0: /* A: Ascending 0,1,2,3 */
-                idx = inst->arp_step % 4;
-                break;
-            case 1: /* B: Descending 3,2,1,0 */
-                idx = 3 - (inst->arp_step % 4);
-                break;
-            case 2: /* C: Up-down 0,1,2,3,2,1 */
-                pattern_len = 6;
+            case 0: /* A: Ascending I, III, V, VIII */
                 {
-                    int p = inst->arp_step % 6;
-                    if (p < 4) idx = p;
-                    else idx = 6 - p; /* 4->2, 5->1 */
+                    static const int asc_pat[4] = {0, 2, 4, 5};
+                    idx = asc_pat[inst->arp_step % 4];
                 }
                 break;
-            case 3: /* D: Random */
-                idx = (int)(rng_float(&inst->rng_state) * 4.0f);
-                if (idx > 3) idx = 3;
+            case 1: /* B: Descending VIII, V, III, I */
+                {
+                    static const int desc_pat[4] = {5, 4, 2, 0};
+                    idx = desc_pat[inst->arp_step % 4];
+                }
+                break;
+            case 2: /* C: Up-down 0,2,4,5,4,2 */
+                pattern_len = 6;
+                {
+                    static const int updn_pat[6] = {0, 2, 4, 5, 4, 2};
+                    idx = updn_pat[inst->arp_step % 6];
+                }
+                break;
+            case 3: /* D: Random from all 6 */
+                idx = (int)(rng_float(&inst->rng_state) * 6.0f);
+                if (idx > 5) idx = 5;
                 break;
         }
 
@@ -1657,11 +1683,11 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         float out_l = dry_l * (1.0f - mix) + wet_l * mix;
         float out_r = dry_r * (1.0f - mix) + wet_r * mix;
 
-        /* 9. Soft clip and convert back to int16 */
-        if (out_l > 1.0f) out_l = 1.0f;
-        else if (out_l < -1.0f) out_l = -1.0f;
-        if (out_r > 1.0f) out_r = 1.0f;
-        else if (out_r < -1.0f) out_r = -1.0f;
+        /* 9. Soft clip with tanh for musical saturation (bypass at mix=0 for clean passthrough) */
+        if (mix > 0.001f) {
+            out_l = tanhf(out_l * 1.5f) * 0.667f;
+            out_r = tanhf(out_r * 1.5f) * 0.667f;
+        }
 
         audio_inout[i * 2]     = (int16_t)(out_l * 32767.0f);
         audio_inout[i * 2 + 1] = (int16_t)(out_r * 32767.0f);
