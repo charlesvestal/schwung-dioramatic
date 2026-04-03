@@ -71,6 +71,7 @@ typedef struct {
     float speed;            /* playback rate */
     float speed_target;     /* for glide algorithm */
     float speed_glide_rate; /* per-sample lerp rate */
+    float detune;           /* micro-detuning multiplier (0.995-1.005) for chorus shimmer */
     int direction;          /* +1 forward, -1 reverse */
     float pan;              /* -1.0 to +1.0 */
     float amplitude;        /* base amplitude */
@@ -187,6 +188,11 @@ typedef struct {
     float predelay_buf_l[4096];
     float predelay_buf_r[4096];
     int predelay_pos;
+
+    /* Delay line modulation — slow LFO per line creates chorus-like
+       movement in the reverb tail, making it sound alive and lush
+       rather than static and metallic */
+    float mod_phase[FDN_LINES];
 } fdn_reverb_t;
 
 typedef struct {
@@ -485,11 +491,20 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         rev->ap_pos[i] = (pos + 1) % len;
     }
 
-    /* Read from delay lines */
+    /* Read from delay lines with subtle modulation for lush chorus-like tail */
     float taps[FDN_LINES];
+    static const float mod_rates[FDN_LINES] = {0.37f, 0.47f, 0.31f, 0.53f};  /* Hz, different per line */
+    static const float mod_depth = 12.0f;  /* samples of modulation excursion */
     for (int i = 0; i < FDN_LINES; i++) {
-        int read_pos = (rev->write_pos[i] - p->delay_lengths[i] + FDN_MAX_DELAY) & (FDN_MAX_DELAY - 1);
+        /* Modulated read position — creates subtle pitch/time variation in the tail */
+        float mod_offset = sinf(2.0f * (float)M_PI * rev->mod_phase[i]) * mod_depth;
+        int base_delay = p->delay_lengths[i] + (int)mod_offset;
+        if (base_delay < 1) base_delay = 1;
+        if (base_delay >= FDN_MAX_DELAY) base_delay = FDN_MAX_DELAY - 1;
+        int read_pos = (rev->write_pos[i] - base_delay + FDN_MAX_DELAY) & (FDN_MAX_DELAY - 1);
         taps[i] = rev->lines[i][read_pos];
+        rev->mod_phase[i] += mod_rates[i] / 44100.0f;
+        if (rev->mod_phase[i] >= 1.0f) rev->mod_phase[i] -= 1.0f;
     }
 
     /* Hadamard mixing (4x4 unnormalized, then scale by 0.5) */
@@ -510,9 +525,9 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         rev->write_pos[i] = (rev->write_pos[i] + 1) & (FDN_MAX_DELAY - 1);
     }
 
-    /* Stereo output from alternating lines (scaled to prevent hotness) */
-    *out_l = (taps[0] + taps[2]) * 0.35f;
-    *out_r = (taps[1] + taps[3]) * 0.35f;
+    /* Stereo output — alternating lines for width, scaled for lush-not-overwhelming */
+    *out_l = (taps[0] + taps[2]) * 0.45f;
+    *out_r = (taps[1] + taps[3]) * 0.45f;
 }
 
 /* ============================================================================
@@ -547,6 +562,10 @@ static void init_grain_common(grain_t *g, dioramatic_instance_t *inst, int start
     g->speed = speed;
     g->speed_target = 0.0f;
     g->speed_glide_rate = 0.0f;
+    /* Micro-detuning: ±8 cents random per grain for natural chorus shimmer.
+       This is what makes granular effects sound "crystalline" and "glimmering"
+       rather than digital and sterile. Each grain is slightly different. */
+    g->detune = 1.0f + (rng_float(&inst->rng_state) - 0.5f) * 0.009f;  /* ±~8 cents */
 
     /* Shorten grains for extreme pitch shifts to sound musical rather than "tape slowing down" */
     if (speed > 1.5f || speed < 0.75f) {
@@ -603,8 +622,8 @@ static void mosaic_trigger_grain(dioramatic_instance_t *inst) {
 }
 
 static void mosaic_tick(dioramatic_instance_t *inst) {
-    /* More grains, faster triggers, minimum overlap of 4 */
-    int min_grains = 2 + (int)(inst->activity * 6.0f);  /* 2 to 8 */
+    /* Dense grain triggering for lush overlap */
+    int min_grains = 3 + (int)(inst->activity * 6.0f);  /* 3 to 9 */
     int trigger_interval = inst->subdivision_samples / min_grains;
     if (trigger_interval < 128) trigger_interval = 128;  /* ~3ms minimum */
 
@@ -612,6 +631,21 @@ static void mosaic_tick(dioramatic_instance_t *inst) {
     if (inst->trigger_counter >= trigger_interval) {
         inst->trigger_counter = 0;
         mosaic_trigger_grain(inst);
+
+        /* Shimmer layer: every other trigger, add a quiet octave-up grain.
+           This creates the "sparkly sprinkles" quality — a delicate halo
+           of high harmonics floating above the main effect. */
+        if (inst->trigger_counter == 0 && (rng_next(&inst->rng_state) & 1)) {
+            grain_t *shimmer = find_free_grain(inst);
+            if (shimmer) {
+                int sub = inst->subdivision_samples;
+                int wp = inst->capture.write_pos;
+                int start = (wp - (int)(rng_float(&inst->rng_state) * (float)sub) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                init_grain_common(shimmer, inst, start, sub, 2.0f);
+                shimmer->amplitude *= 0.2f;  /* very quiet — felt not heard */
+                shimmer->pan = (rng_float(&inst->rng_state) - 0.5f) * 0.8f;  /* wider stereo for shimmer */
+            }
+        }
     }
 }
 
@@ -1591,8 +1625,8 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
                     gr->speed += (gr->speed_target - gr->speed) * gr->speed_glide_rate;
                 }
 
-                /* Advance grain with pitch modulation */
-                gr->position += gr->speed * pitch_mod * (float)gr->direction;
+                /* Advance grain with pitch modulation + per-grain detune */
+                gr->position += gr->speed * gr->detune * pitch_mod * (float)gr->direction;
                 gr->env_phase += gr->env_inc;
 
                 if (gr->env_phase >= 1.0f) {
