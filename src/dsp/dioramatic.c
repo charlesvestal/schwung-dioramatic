@@ -104,6 +104,56 @@ static const char *reverb_mode_names[NUM_REVERB_MODES] = {
 static const char *onoff_names[2] = { "Off", "On" };
 
 /* ============================================================================
+ * SVF lowpass filter state
+ * ============================================================================ */
+
+typedef struct {
+    float ic1eq, ic2eq;
+} svf_state_t;
+
+/* ============================================================================
+ * FDN stereo reverb
+ * ============================================================================ */
+
+#define FDN_LINES 4
+#define FDN_MAX_DELAY 8192
+#define FDN_NUM_AP 4   /* input allpass diffusers */
+#define FDN_AP_MAX 512
+
+typedef struct {
+    /* Delay lines */
+    float lines[FDN_LINES][FDN_MAX_DELAY];
+    int write_pos[FDN_LINES];
+
+    /* Per-line one-pole lowpass for damping */
+    float lp_state[FDN_LINES];
+
+    /* Input allpass diffusers */
+    float ap_buf[FDN_NUM_AP][FDN_AP_MAX];
+    int ap_pos[FDN_NUM_AP];
+
+    /* Pre-delay buffer */
+    float predelay_buf_l[4096];
+    float predelay_buf_r[4096];
+    int predelay_pos;
+} fdn_reverb_t;
+
+typedef struct {
+    int delay_lengths[FDN_LINES];  /* prime numbers */
+    float feedback;
+    float damping;    /* one-pole LP coefficient, 0=no damping, 1=max */
+    int predelay;     /* samples */
+    int ap_lengths[FDN_NUM_AP];
+} reverb_preset_t;
+
+static const reverb_preset_t reverb_presets[4] = {
+    /* Room */    {{1087, 1283, 1447, 1663}, 0.75f, 0.3f, 0,    {142, 107, 379, 277}},
+    /* Plate */   {{2017, 2389, 2777, 3191}, 0.85f, 0.5f, 441,  {142, 107, 379, 277}},
+    /* Hall */    {{3547, 4177, 4831, 5557}, 0.92f, 0.6f, 882,  {142, 107, 379, 277}},
+    /* Ambient */ {{5501, 6469, 7481, 8179}, 0.97f, 0.7f, 1323, {142, 107, 379, 277}},
+};
+
+/* ============================================================================
  * Instance structure
  * ============================================================================ */
 
@@ -135,6 +185,18 @@ typedef struct {
     int subdivision_samples;
     int trigger_counter;
     uint32_t rng_state;
+
+    /* LFO for pitch modulation */
+    float lfo_phase;
+
+    /* SVF lowpass filter */
+    svf_state_t svf_l, svf_r;
+    float svf_g, svf_k, svf_a1, svf_a2, svf_a3;
+    float svf_cached_filter;
+    float svf_cached_filter_res;
+
+    /* FDN stereo reverb */
+    fdn_reverb_t reverb;
 } dioramatic_instance_t;
 
 /* ============================================================================
@@ -244,6 +306,100 @@ static void recalculate_subdivision(dioramatic_instance_t *inst) {
 }
 
 /* ============================================================================
+ * SVF lowpass filter (per-sample, using cached coefficients)
+ * ============================================================================ */
+
+static void svf_update_coefficients(dioramatic_instance_t *inst) {
+    float cutoff_hz = 80.0f * powf(225.0f, inst->filter);
+    if (cutoff_hz > 20000.0f) cutoff_hz = 20000.0f;
+    if (cutoff_hz < 20.0f) cutoff_hz = 20.0f;
+
+    float g = tanf((float)M_PI * cutoff_hz / (float)SAMPLE_RATE);
+    float k = 2.0f - 2.0f * inst->filter_res * 0.95f;
+
+    inst->svf_g = g;
+    inst->svf_k = k;
+    inst->svf_a1 = 1.0f / (1.0f + g * (g + k));
+    inst->svf_a2 = g * inst->svf_a1;
+    inst->svf_a3 = g * inst->svf_a2;
+    inst->svf_cached_filter = inst->filter;
+    inst->svf_cached_filter_res = inst->filter_res;
+}
+
+static inline float svf_lowpass(svf_state_t *s, const dioramatic_instance_t *inst, float input) {
+    float v3 = input - s->ic2eq;
+    float v1 = inst->svf_a1 * s->ic1eq + inst->svf_a2 * v3;
+    float v2 = s->ic2eq + inst->svf_a2 * s->ic1eq + inst->svf_a3 * v3;
+    s->ic1eq = 2.0f * v1 - s->ic1eq;
+    s->ic2eq = 2.0f * v2 - s->ic2eq;
+    return v2;  /* lowpass output */
+}
+
+/* ============================================================================
+ * FDN stereo reverb (per-sample)
+ * ============================================================================ */
+
+static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, float *out_l, float *out_r) {
+    const reverb_preset_t *p = &reverb_presets[mode];
+
+    /* Pre-delay */
+    float pd_l, pd_r;
+    if (p->predelay > 0) {
+        int pd_read = (rev->predelay_pos - p->predelay + 4096) & 4095;
+        pd_l = rev->predelay_buf_l[pd_read];
+        pd_r = rev->predelay_buf_r[pd_read];
+        rev->predelay_buf_l[rev->predelay_pos] = in_l;
+        rev->predelay_buf_r[rev->predelay_pos] = in_r;
+        rev->predelay_pos = (rev->predelay_pos + 1) & 4095;
+    } else {
+        pd_l = in_l;
+        pd_r = in_r;
+    }
+
+    /* Input diffusion: 4 series allpass filters */
+    float diff_in = (pd_l + pd_r) * 0.5f;
+    for (int i = 0; i < FDN_NUM_AP; i++) {
+        float *buf = rev->ap_buf[i];
+        int len = p->ap_lengths[i];
+        int pos = rev->ap_pos[i];
+        float delayed = buf[pos];
+        float ap_out = delayed - 0.6f * diff_in;
+        buf[pos] = diff_in + 0.6f * ap_out;
+        diff_in = ap_out;
+        rev->ap_pos[i] = (pos + 1) % len;
+    }
+
+    /* Read from delay lines */
+    float taps[FDN_LINES];
+    for (int i = 0; i < FDN_LINES; i++) {
+        int read_pos = (rev->write_pos[i] - p->delay_lengths[i] + FDN_MAX_DELAY) & (FDN_MAX_DELAY - 1);
+        taps[i] = rev->lines[i][read_pos];
+    }
+
+    /* Hadamard mixing (4x4 unnormalized, then scale by 0.5) */
+    float mixed[FDN_LINES];
+    mixed[0] = 0.5f * ( taps[0] + taps[1] + taps[2] + taps[3]);
+    mixed[1] = 0.5f * ( taps[0] - taps[1] + taps[2] - taps[3]);
+    mixed[2] = 0.5f * ( taps[0] + taps[1] - taps[2] - taps[3]);
+    mixed[3] = 0.5f * ( taps[0] - taps[1] - taps[2] + taps[3]);
+
+    /* Apply feedback, damping, and write back with input */
+    for (int i = 0; i < FDN_LINES; i++) {
+        float fb = mixed[i] * p->feedback;
+        /* One-pole lowpass damping */
+        rev->lp_state[i] += p->damping * (fb - rev->lp_state[i]);
+        fb = rev->lp_state[i];
+        /* Write with input */
+        rev->lines[i][rev->write_pos[i]] = diff_in + fb;
+        rev->write_pos[i] = (rev->write_pos[i] + 1) & (FDN_MAX_DELAY - 1);
+    }
+
+    /* Stereo output from alternating lines */
+    *out_l = taps[0] + taps[2];
+    *out_r = taps[1] + taps[3];
+}
+
+/* ============================================================================
  * Mosaic algorithm - grain trigger
  * ============================================================================ */
 
@@ -350,8 +506,13 @@ static void *v2_create_instance(const char *module_dir, const char *config_json)
     /* Grain engine defaults */
     inst->bpm = 120.0f;
     inst->rng_state = 12345;
+    inst->lfo_phase = 0.0f;
     init_envelope_tables(inst->env_tables);
     recalculate_subdivision(inst);
+
+    /* Initialize SVF coefficients */
+    inst->svf_cached_filter = -1.0f;  /* force first update */
+    svf_update_coefficients(inst);
 
     if (g_host && g_host->log) {
         g_host->log("dioramatic: instance created");
@@ -379,6 +540,17 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
     }
     recalculate_subdivision(inst);
 
+    /* Recompute SVF coefficients if filter params changed */
+    if (inst->filter != inst->svf_cached_filter ||
+        inst->filter_res != inst->svf_cached_filter_res) {
+        svf_update_coefficients(inst);
+    }
+
+    /* Precompute LFO rate for this block */
+    float lfo_rate_hz = 0.1f + inst->pitch_mod_rate * 9.9f;
+    float lfo_phase_inc = lfo_rate_hz / (float)SAMPLE_RATE;
+    int do_pitch_mod = (inst->pitch_mod_depth > 0.001f);
+
     for (int i = 0; i < frames; i++) {
         /* 1. Read input, convert to float */
         float dry_l = (float)audio_inout[i * 2] / 32768.0f;
@@ -390,10 +562,19 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         inst->capture.buffer[wp].r = dry_r;
         inst->capture.write_pos = (wp + 1) % CAPTURE_SAMPLES;
 
-        /* 3. Algorithm tick (may trigger new grains) */
+        /* 3. Advance LFO phase (once per sample, before grain loop) */
+        float pitch_mod = 1.0f;
+        if (do_pitch_mod) {
+            float lfo_val = sinf(2.0f * (float)M_PI * inst->lfo_phase);
+            pitch_mod = powf(2.0f, inst->pitch_mod_depth * lfo_val * (100.0f / 1200.0f));
+        }
+        inst->lfo_phase += lfo_phase_inc;
+        if (inst->lfo_phase >= 1.0f) inst->lfo_phase -= 1.0f;
+
+        /* 4. Algorithm tick (may trigger new grains) */
         algorithm_tick(inst);
 
-        /* 4. Accumulate all active grains */
+        /* 5. Accumulate all active grains (with pitch modulation) */
         float wet_l = 0.0f, wet_r = 0.0f;
         for (int g = 0; g < MAX_GRAINS; g++) {
             grain_t *gr = &inst->grains[g];
@@ -425,8 +606,8 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
             wet_l += samp_l * amp * pan_l;
             wet_r += samp_r * amp * pan_r;
 
-            /* Advance grain */
-            gr->position += gr->speed * (float)gr->direction;
+            /* Advance grain with pitch modulation */
+            gr->position += gr->speed * pitch_mod * (float)gr->direction;
             gr->env_phase += gr->env_inc;
 
             if (gr->env_phase >= 1.0f) {
@@ -434,11 +615,23 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
             }
         }
 
-        /* 5. Mix dry/wet */
+        /* 6. SVF lowpass filter on wet signal */
+        wet_l = svf_lowpass(&inst->svf_l, inst, wet_l);
+        wet_r = svf_lowpass(&inst->svf_r, inst, wet_r);
+
+        /* 7. FDN reverb send/return */
+        if (inst->space > 0.001f) {
+            float rev_out_l = 0.0f, rev_out_r = 0.0f;
+            fdn_process(&inst->reverb, inst->reverb_mode, wet_l, wet_r, &rev_out_l, &rev_out_r);
+            wet_l += rev_out_l * inst->space;
+            wet_r += rev_out_r * inst->space;
+        }
+
+        /* 8. Mix dry/wet */
         float out_l = dry_l * (1.0f - inst->mix) + wet_l * inst->mix;
         float out_r = dry_r * (1.0f - inst->mix) + wet_r * inst->mix;
 
-        /* 6. Soft clip and convert back to int16 */
+        /* 9. Soft clip and convert back to int16 */
         if (out_l > 1.0f) out_l = 1.0f;
         else if (out_l < -1.0f) out_l = -1.0f;
         if (out_r > 1.0f) out_r = 1.0f;
