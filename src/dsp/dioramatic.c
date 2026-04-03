@@ -271,6 +271,7 @@ typedef struct {
     int onset_count;
     int onset_head;
     float onset_prev_rms;
+    int onset_debounce;      /* samples since last onset (prevents re-triggering) */
     int strum_cascade_step;
     int strum_cascade_timer;
     int strum_cascade_total;
@@ -888,15 +889,19 @@ static void strum_tick(dioramatic_instance_t *inst) {
     int sub = inst->subdivision_samples;
     int wp = inst->capture.write_pos;
 
-    /* Onset detection */
-    float rms = fabsf(inst->capture.buffer[wp].l) + fabsf(inst->capture.buffer[wp].r);
-    if (rms > 0.1f && inst->onset_prev_rms < 0.05f) {
-        inst->onset_positions[inst->onset_head] = wp;
+    /* Onset detection — read from the sample just written (one behind write_pos) */
+    int prev_wp = (wp - 1 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+    float rms = fabsf(inst->capture.buffer[prev_wp].l) + fabsf(inst->capture.buffer[prev_wp].r);
+    if (inst->onset_debounce > 0) {
+        inst->onset_debounce--;
+    } else if (rms > 0.1f && inst->onset_prev_rms < 0.05f) {
+        inst->onset_positions[inst->onset_head] = prev_wp;
         inst->onset_head = (inst->onset_head + 1) % 8;
         if (inst->onset_count < 8) inst->onset_count++;
         inst->strum_cascade_step = 0;
         inst->strum_cascade_timer = 0;
         inst->strum_cascade_total = 2 + (int)(inst->repeats * 6.0f);
+        inst->onset_debounce = 4410;  /* ~100ms debounce */
     }
     inst->onset_prev_rms = rms;
 
@@ -939,6 +944,7 @@ static void strum_tick(dioramatic_instance_t *inst) {
         case 2: /* C: Cascading chain through all stored onsets */
         case 3: { /* D: Like C but with double-speed grains interleaved */
             if (inst->strum_cascade_step < inst->strum_cascade_total) {
+                /* Active cascade */
                 inst->strum_cascade_timer++;
                 if (inst->strum_cascade_timer >= cascade_interval) {
                     inst->strum_cascade_timer = 0;
@@ -947,7 +953,6 @@ static void strum_tick(dioramatic_instance_t *inst) {
                     if (g) {
                         init_grain_common(g, inst, inst->onset_positions[oi], sub, 1.0f);
                     }
-                    /* Variation D: interleave double-speed grain */
                     if (inst->variation == 3) {
                         grain_t *g2 = find_free_grain(inst);
                         if (g2) {
@@ -956,6 +961,14 @@ static void strum_tick(dioramatic_instance_t *inst) {
                         }
                     }
                     inst->strum_cascade_step++;
+                }
+            } else {
+                /* Cascade finished — re-trigger periodically from stored onsets */
+                inst->trigger_counter++;
+                if (inst->trigger_counter >= sub * 2) {
+                    inst->trigger_counter = 0;
+                    inst->strum_cascade_step = 0;
+                    inst->strum_cascade_timer = 0;
                 }
             }
             break;
@@ -1481,13 +1494,11 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
                 int rp;
 
                 if (tap->speed < 0.0f) {
-                    /* Warp variation D: reverse read — read forward from tap position */
-                    rp = (de->write_pos - tap->delay_samples + DELAY_BUFFER_SAMPLES) % DELAY_BUFFER_SAMPLES;
-                    /* Reverse: read from the opposite end of the tap window */
-                    rp = (de->write_pos - (tap->delay_samples - (de->write_pos - rp + DELAY_BUFFER_SAMPLES) % DELAY_BUFFER_SAMPLES) + DELAY_BUFFER_SAMPLES) % DELAY_BUFFER_SAMPLES;
-                    /* Simpler: just mirror the read position around the write pos */
-                    int offset = tap->delay_samples;
-                    rp = (de->write_pos + offset) % DELAY_BUFFER_SAMPLES;
+                    /* Warp variation D: reverse read — mirror the tap position.
+                       Normal read: write_pos - delay. Reverse: read from the
+                       "other side" — same distance but we want recently written audio
+                       played in reverse order. Use half the delay as read point. */
+                    rp = (de->write_pos - tap->delay_samples / 2 + DELAY_BUFFER_SAMPLES) % DELAY_BUFFER_SAMPLES;
                 } else {
                     rp = (de->write_pos - tap->delay_samples + DELAY_BUFFER_SAMPLES) % DELAY_BUFFER_SAMPLES;
                 }
