@@ -116,6 +116,10 @@ class DioramaticProcessor extends AudioWorkletProcessor {
     // Pitch mod LFO
     this.lfoPhase = 0;
 
+    // Output smoothing — catches pops/clicks
+    this.prevOutL = 0; this.prevOutR = 0;
+    this.dcL = 0; this.dcR = 0;
+
     // RNG
     this.rngState = 12345;
     this.peakLevel = 0; this.meterCounter = 0;
@@ -354,6 +358,24 @@ class DioramaticProcessor extends AudioWorkletProcessor {
       let oR = dryR * (1 - this.mix) + wetR * this.mix;
       oL = Math.tanh(oL * 1.5) * 0.667;
       oR = Math.tanh(oR * 1.5) * 0.667;
+
+      // DC blocker (removes offset that causes clicks)
+      const dcCoeff = 0.997;
+      const dcOutL = oL - this.dcL + dcCoeff * this.prevOutL;
+      const dcOutR = oR - this.dcR + dcCoeff * this.prevOutR;
+      this.dcL = oL; this.dcR = oR;
+      this.prevOutL = dcOutL; this.prevOutR = dcOutR;
+      oL = dcOutL; oR = dcOutR;
+
+      // Slew limiter — caps sample-to-sample jump to prevent clicks
+      const maxSlew = 0.05;
+      const dL = oL - (outL[i > 0 ? i - 1 : 0] || 0);
+      if (dL > maxSlew) oL = (outL[i > 0 ? i - 1 : 0] || 0) + maxSlew;
+      else if (dL < -maxSlew) oL = (outL[i > 0 ? i - 1 : 0] || 0) - maxSlew;
+      const dR = oR - (outR[i > 0 ? i - 1 : 0] || 0);
+      if (dR > maxSlew) oR = (outR[i > 0 ? i - 1 : 0] || 0) + maxSlew;
+      else if (dR < -maxSlew) oR = (outR[i > 0 ? i - 1 : 0] || 0) - maxSlew;
+
       outL[i] = oL; outR[i] = oR;
 
       const lvl = Math.abs(oL) > Math.abs(oR) ? Math.abs(oL) : Math.abs(oR);
