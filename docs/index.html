@@ -143,9 +143,9 @@ class DioramaticProcessor extends AudioWorkletProcessor {
     const svfK=2-2*0.1*0.95;
     const svfA1=1/(1+svfG*(svfG+svfK));const svfA2=svfG*svfA1;const svfA3=svfG*svfA2;
     const revSend=this.reverb;
-    const feedback=0.7+this.depth*0.25;
+    const feedback=Math.min(0.97,0.7+this.depth*0.2+this.sustain*0.08);
     const damping=0.3+(1-this.tone)*0.4;
-    const shimAmt=this.shimmer*0.08;
+    const shimAmt=this.shimmer*0.08+this.sustain*0.15;
     const grainInterval=Math.max(64,Math.floor(4410/(0.5+this.grain*5.5)));
     const sparkleCheck=4410;
     for(let i=0;i<N;i++){
@@ -215,7 +215,7 @@ class DioramaticProcessor extends AudioWorkletProcessor {
         for(let l=0;l<4;l++){
           let fb=mx[l]*feedback;this.fdnLP[l]+=damping*(fb-this.fdnLP[l]);
           fb=this.fdnLP[l]+shimOut*shimAmt;
-          if(fb>0.9)fb=0.9;else if(fb<-0.9)fb=-0.9;
+          fb=Math.tanh(fb*1.2)*0.85;
           this.fdnLines[l][this.fdnPos[l]]=diff+fb;
           this.fdnPos[l]=(this.fdnPos[l]+1)&(this.fdnSize-1);
         }
