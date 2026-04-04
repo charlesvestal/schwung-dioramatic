@@ -168,8 +168,9 @@ static void process(void *instance, int16_t *audio, int frames) {
     float feedback = 1.0f - 0.35f * powf(1.0f - inst->sustain, 2.0f);
     if (feedback > 0.998f) feedback = 0.998f;
 
-    /* Shimmer: how much octave-up granular pitch shift feeds back */
-    float shim_level = inst->shimmer * 0.5f;
+    /* Shimmer: how much octave-up feeds back. Tapered so high values
+       don't overwhelm the reverb — the direct output carries the sparkle. */
+    float shim_level = inst->shimmer * 0.3f;
 
     /* Smear: grain size in the pitch shifter. Small=sparkly, large=smooth */
     float grain_ms = 5.0f + inst->smear * 95.0f;  /* 5ms to 100ms */
@@ -327,6 +328,12 @@ static void process(void *instance, int16_t *audio, int frames) {
         /* === OUTPUT === */
         float rev_l = (taps[0] + taps[2]) * 0.6f;
         float rev_r = (taps[1] + taps[3]) * 0.6f;
+
+        /* Add shimmer grains directly to output — heard as distinct sparkles
+           on top of the reverb wash, not just buried inside the feedback.
+           This is the "trail of grains careening into space." */
+        rev_l += shim_l * inst->shimmer * 0.4f;
+        rev_r += shim_r * inst->shimmer * 0.4f;
 
         /* Stereo decorrelation on right (~8ms) */
         inst->stereo_buf[inst->stereo_pos] = rev_r;

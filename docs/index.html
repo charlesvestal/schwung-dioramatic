@@ -100,7 +100,7 @@ const lens=[1087+Math.floor(this.space*3000),1283+Math.floor(this.space*3500),
 1447+Math.floor(this.space*3800),1663+Math.floor(this.space*4200)];
 for(let i=0;i<4;i++)if(lens[i]>=N)lens[i]=N-1;
 let fb=Math.min(.998,1-.35*Math.pow(1-this.sustain,2));
-const sLv=this.shimmer*.5;
+const sLv=this.shimmer*.3;
 const gMs=5+this.smear*95;
 let sTI=Math.max(128,Math.floor(4410/(1+this.scatter*8)));
 const dmp=(0.1+this.warmth*.6)*(1-this.sustain*.5);
@@ -150,7 +150,7 @@ this.LLP[l]+=dmp*(f-this.LLP[l]);f=this.LLP[l];
 f+=((l<2)?sL:sR)*sLv;f+=fbd*.2;
 if(f>.7||f<-.7)f=Math.tanh(f)*.98;
 this.L[l][this.LP[l]]=df+f;this.LP[l]=(this.LP[l]+1)&NM}
-let rL=(tp[0]+tp[2])*.6,rR=(tp[1]+tp[3])*.6;
+let rL=(tp[0]+tp[2])*.6+sL*this.shimmer*.4,rR=(tp[1]+tp[3])*.6+sR*this.shimmer*.4;
 this.STB[this.STP]=rR;let srd=(this.STP-353+1024)&1023;
 rR=this.STB[srd];this.STP=(this.STP+1)&1023;
 let hL=rL-this.SPL;this.SPL+=.15*hL;rL+=hL*.15;
