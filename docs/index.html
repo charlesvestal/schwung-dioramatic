@@ -91,8 +91,9 @@ class DioramaticProcessor extends AudioWorkletProcessor {
       this.grains.push({active:false,start:0,len:0,pos:0,speed:1,amp:0,
         envInc:0,envPhase:0,panL:0.5,panR:0.5,detune:1});
     }
-    this.cloudTimer = 0;
-    this.shimmerGrainTimer = 0;
+    this.burstEnergy = 0; this.burstEnergySlow = 0;
+    this.burstActive = 0; this.burstTimer = 0; this.burstInterval = 128;
+    this.burstOrigin = 0; this.burstCount = 0; this.burstDebounce = 0;
 
     // FDN Reverb
     this.fdnSize = 8192;
@@ -231,29 +232,56 @@ class DioramaticProcessor extends AudioWorkletProcessor {
 
       // === GRAIN TRIGGERS ===
 
-      // Cloud grains: fire continuously, extra grains on loud input
-      this.cloudTimer++;
-      if (this.cloudTimer >= cloudRate) {
-        this.cloudTimer = 0;
-        const sp = this.rng() < 0.85 ? 1 : 2;
-        this.triggerGrain(sp, 0.4 + this.sustain * 0.6, cloudLenMs + this.rng() * 20, panWidth);
-        // Loud input spawns extra grains for denser texture
-        if (inLevel > 0.15 && this.rng() < inLevel * 2) {
-          this.triggerGrain(this.rng() < 0.5 ? 1 : 2, 0.15 + this.sustain * 0.2, cloudLenMs * 0.7, panWidth);
+      // === BURST SCATTER SYSTEM ===
+      const inEnergy = dryL * dryL + dryR * dryR;
+      this.burstEnergy += 0.05 * (inEnergy - this.burstEnergy);
+      this.burstEnergySlow += 0.0005 * (inEnergy - this.burstEnergySlow);
+      if (this.burstDebounce > 0) this.burstDebounce--;
+
+      // Detect transient
+      if (this.burstDebounce === 0 &&
+          this.burstEnergy > this.burstEnergySlow * 3 + 0.001 &&
+          this.burstEnergy > 0.002) {
+        const numGrains = 3 + Math.floor(this.scatter * 12);
+        this.burstActive = numGrains;
+        this.burstOrigin = (this.capPos - 441 + this.capSize) % this.capSize;
+        this.burstTimer = 0;
+        this.burstInterval = 128;
+        this.burstCount = 0;
+        this.burstDebounce = 4410;
+        // Immediate splash
+        const immediate = 1 + Math.floor(this.scatter * 3);
+        for (let g = 0; g < immediate && this.burstActive > 0; g++) {
+          let sp = this.rng() < 0.4 ? 1 : (this.rng() < 0.7 ? 2 : 4);
+          if (this.shimmer > 0.5 && this.rng() < this.shimmer)
+            sp = this.rng() < 0.5 ? 2 : 4;
+          const len = cloudLenMs + this.rng() * 40;
+          const amp = 0.5 + this.sustain * 0.4;
+          const saveCap = this.capPos;
+          this.capPos = (this.burstOrigin + Math.floor(this.rng() * 882)) % this.capSize;
+          this.triggerGrain(sp, amp, len, panWidth);
+          this.capPos = saveCap;
+          this.burstActive--; this.burstCount++;
         }
       }
 
-      // Shimmer grains: fire continuously, extra sparkle on loud input
-      this.shimmerGrainTimer++;
-      if (this.shimmerGrainTimer >= shimGrainRate) {
-        this.shimmerGrainTimer = 0;
-        this.triggerGrain(2, 0.3 + this.shimmer * 0.5, sustainGrainLen + this.rng() * 100, panWidth * 0.8);
-        if (this.rng() < 0.15 + this.shimmer * 0.3) {
-          this.triggerGrain(4, 0.4 + this.shimmer * 0.3, 2 + this.rng() * 5, panWidth);
-        }
-        // Loud hits spawn extra shimmer burst
-        if (inLevel > 0.2 && this.rng() < inLevel * 1.5) {
-          this.triggerGrain(2, 0.2 + this.shimmer * 0.15, sustainGrainLen * 0.5, panWidth);
+      // Continue burst: grains at increasing intervals
+      if (this.burstActive > 0) {
+        this.burstTimer++;
+        if (this.burstTimer >= this.burstInterval) {
+          this.burstTimer = 0;
+          this.burstInterval = Math.min(44100, Math.floor(this.burstInterval * (1.3 + this.sustain * 0.5)));
+          let sp = this.rng() < 0.3 ? 1 : (this.rng() < 0.6 ? 2 : 4);
+          if (this.shimmer > 0.5 && this.rng() < this.shimmer)
+            sp = this.rng() < 0.5 ? 2 : 4;
+          const decay = 1 / (1 + this.burstCount * 0.15);
+          const amp = (0.5 + this.sustain * 0.4) * decay;
+          const len = cloudLenMs + this.rng() * 60;
+          const saveCap = this.capPos;
+          this.capPos = (this.burstOrigin + Math.floor(this.rng() * 882)) % this.capSize;
+          this.triggerGrain(sp, amp, len, panWidth);
+          this.capPos = saveCap;
+          this.burstActive--; this.burstCount++;
         }
       }
 

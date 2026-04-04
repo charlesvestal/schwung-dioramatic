@@ -98,9 +98,19 @@ typedef struct {
     /* Grain engine */
     grain_t grains[MAX_GRAINS];
     float env_table[ENV_TABLE_SIZE];
-    int cloud_timer;
-    int shimmer_grain_timer;
     uint32_t rng_state;
+
+    /* Burst scatter system: detects transients and fires a burst of grains
+       that get farther apart over time — like a bouncing ball or thrown crystals.
+       Each burst reads from the same capture position (the transient). */
+    float burst_energy;        /* fast input energy tracker */
+    float burst_energy_slow;   /* slow average for adaptive threshold */
+    int burst_active;          /* grains remaining in current burst */
+    int burst_timer;           /* samples until next grain in burst */
+    int burst_interval;        /* current interval (grows each grain) */
+    int burst_origin;          /* capture buffer position of the transient */
+    int burst_count;           /* total grains fired in this burst */
+    int burst_debounce;        /* prevent re-triggering too soon */
 
     /* LFO */
     float lfo_phase;
@@ -430,41 +440,93 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         inst->lfo_phase += lfo_inc;
         if (inst->lfo_phase >= 1.0f) inst->lfo_phase -= 1.0f;
 
-        /* === GRAIN TRIGGERS === */
+        /* === GRAIN BURST SYSTEM ===
+           Detects transients in the input. On each transient, fires an
+           immediate burst of grains that scatter outward — dense at first,
+           then sparser and sparser. Like throwing crystals and hearing them
+           land one by one, each ringing through the reverb.
 
-        /* Input level — loud hits spawn extra grains for denser texture */
-        float in_level = fabsf(dry_l) + fabsf(dry_r);
+           Scatter controls how many grains per burst (3 to 15).
+           Smear controls grain length (short sparkle to long smear).
+           Shimmer controls pitch mix (1x, 2x, 4x octave up).
+           Sustain controls how far apart the later grains spread. */
 
-        /* Cloud grains (Smear): fire continuously at the set rate */
-        inst->cloud_timer++;
-        if (inst->cloud_timer >= cloud_rate) {
-            inst->cloud_timer = 0;
-            float sp = rng_float(&inst->rng_state) < 0.85f ? 1.0f : 2.0f;
-            trigger_grain(inst, sp, 0.4f + inst->sustain * 0.6f,
-                          cloud_len_ms + rng_float(&inst->rng_state) * 20.0f, pan_width);
-            /* Extra grain burst on loud input */
-            if (in_level > 0.15f && rng_float(&inst->rng_state) < in_level * 2.0f) {
-                float sp2 = rng_float(&inst->rng_state) < 0.5f ? 1.0f : 2.0f;
-                trigger_grain(inst, sp2, 0.3f + inst->sustain * 0.4f,
-                              cloud_len_ms * 0.7f, pan_width);
+        /* Transient detection: fast energy vs slow average */
+        float in_energy = dry_l * dry_l + dry_r * dry_r;
+        inst->burst_energy += 0.05f * (in_energy - inst->burst_energy);
+        inst->burst_energy_slow += 0.0005f * (in_energy - inst->burst_energy_slow);
+
+        if (inst->burst_debounce > 0) inst->burst_debounce--;
+
+        /* Detect transient: fast energy exceeds slow average significantly */
+        if (inst->burst_debounce == 0 &&
+            inst->burst_energy > inst->burst_energy_slow * 3.0f + 0.001f &&
+            inst->burst_energy > 0.002f) {
+            /* Start a new burst! */
+            int num_grains = 3 + (int)(inst->scatter * 12.0f);  /* 3 to 15 grains */
+            inst->burst_active = num_grains;
+            inst->burst_origin = (inst->capture.write_pos - 441 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+            inst->burst_timer = 0;
+            inst->burst_interval = 128;  /* first grain fires almost immediately */
+            inst->burst_count = 0;
+            inst->burst_debounce = 4410;  /* ~100ms between bursts */
+
+            /* Fire the first few grains IMMEDIATELY — the initial splash */
+            int immediate = 1 + (int)(inst->scatter * 3.0f);  /* 1 to 4 immediate */
+            for (int g = 0; g < immediate && inst->burst_active > 0; g++) {
+                float speed;
+                float r = rng_float(&inst->rng_state);
+                if (r < 0.4f) speed = 1.0f;
+                else if (r < 0.7f) speed = 2.0f;
+                else speed = 4.0f;
+                /* Weight toward octave-up based on Shimmer */
+                if (inst->shimmer > 0.5f && rng_float(&inst->rng_state) < inst->shimmer)
+                    speed = (rng_float(&inst->rng_state) < 0.5f) ? 2.0f : 4.0f;
+
+                float len = cloud_len_ms + rng_float(&inst->rng_state) * 40.0f;
+                float amp = 0.5f + inst->sustain * 0.4f;
+                /* Slight random offset from origin for timbral variation */
+                int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
+                int start_save = inst->capture.write_pos;
+                inst->capture.write_pos = (inst->burst_origin + offset) % CAPTURE_SAMPLES;
+                trigger_grain(inst, speed, amp, len, pan_width);
+                inst->capture.write_pos = start_save;
+
+                inst->burst_active--;
+                inst->burst_count++;
             }
         }
 
-        /* Shimmer grains: fire continuously */
-        inst->shimmer_grain_timer++;
-        if (inst->shimmer_grain_timer >= shim_grain_rate) {
-            inst->shimmer_grain_timer = 0;
-            trigger_grain(inst, 2.0f, 0.3f + inst->shimmer * 0.5f,
-                          sustain_grain_len + rng_float(&inst->rng_state) * 100.0f,
-                          pan_width * 0.8f);
-            if (rng_float(&inst->rng_state) < 0.15f + inst->shimmer * 0.3f) {
-                trigger_grain(inst, 4.0f, 0.4f + inst->shimmer * 0.3f,
-                              3.0f + rng_float(&inst->rng_state) * 5.0f, pan_width);
-            }
-            /* Extra shimmer burst on loud input */
-            if (in_level > 0.2f && rng_float(&inst->rng_state) < in_level * 1.5f) {
-                trigger_grain(inst, 2.0f, 0.35f + inst->shimmer * 0.3f,
-                              sustain_grain_len * 0.5f, pan_width);
+        /* Continue active burst: fire grains at increasing intervals */
+        if (inst->burst_active > 0) {
+            inst->burst_timer++;
+            if (inst->burst_timer >= inst->burst_interval) {
+                inst->burst_timer = 0;
+                /* Interval grows exponentially — bouncing ball / comet tail */
+                inst->burst_interval = (int)((float)inst->burst_interval * (1.3f + inst->sustain * 0.5f));
+                if (inst->burst_interval > 44100) inst->burst_interval = 44100;
+
+                float speed;
+                float r = rng_float(&inst->rng_state);
+                if (r < 0.3f) speed = 1.0f;
+                else if (r < 0.6f) speed = 2.0f;
+                else speed = 4.0f;
+                if (inst->shimmer > 0.5f && rng_float(&inst->rng_state) < inst->shimmer)
+                    speed = (rng_float(&inst->rng_state) < 0.5f) ? 2.0f : 4.0f;
+
+                /* Later grains are quieter and darker */
+                float decay = 1.0f / (1.0f + (float)inst->burst_count * 0.15f);
+                float amp = (0.5f + inst->sustain * 0.4f) * decay;
+                float len = cloud_len_ms + rng_float(&inst->rng_state) * 60.0f;
+
+                int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
+                int start_save = inst->capture.write_pos;
+                inst->capture.write_pos = (inst->burst_origin + offset) % CAPTURE_SAMPLES;
+                trigger_grain(inst, speed, amp, len, pan_width);
+                inst->capture.write_pos = start_save;
+
+                inst->burst_active--;
+                inst->burst_count++;
             }
         }
 
