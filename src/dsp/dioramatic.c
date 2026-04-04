@@ -207,6 +207,15 @@ typedef struct {
 
     /* High shelf state for sparkle boost */
     float sparkle_state_l, sparkle_state_r;
+
+    /* Feedback allpass — modulated for lusher tail */
+    float fb_ap_buf[2][512];
+    int fb_ap_pos[2];
+    float fb_ap_mod_phase[2];
+
+    /* Stereo decorrelation delay */
+    float stereo_delay_buf[1024];
+    int stereo_delay_pos;
 } fdn_reverb_t;
 
 typedef struct {
@@ -294,7 +303,6 @@ typedef struct {
     int onset_positions[8];
     int onset_count;
     int onset_head;
-    float onset_prev_rms;
     int onset_debounce;      /* samples since last onset (prevents re-triggering) */
     int strum_cascade_step;
     int strum_cascade_timer;
@@ -307,7 +315,6 @@ typedef struct {
     /* Arp state */
     int arp_step;
     int arp_step_timer;
-    int arp_cycle;
 
     /* Delay engine (algorithms 9-10) */
     delay_engine_t delay;
@@ -328,6 +335,13 @@ typedef struct {
     float crossfade_level;       /* 1.0 -> 0.0 (fade out old) then 0.0 -> 1.0 (fade in new) */
     int pending_algorithm;
     int pending_variation;
+
+    /* Input envelope follower — effect responds to dynamics */
+    float env_follower;  /* smoothed input level 0-1 */
+
+    /* Onset detection (windowed RMS) */
+    float onset_energy;      /* smoothed input energy for onset detection */
+    float onset_energy_slow; /* slower average for threshold adaptation */
 
     /* DC blocker state */
     float dc_prev_in_l, dc_prev_in_r, dc_prev_out_l, dc_prev_out_r;
@@ -403,31 +417,10 @@ static void init_envelope_tables(float tables[4][ENV_TABLE_SIZE]) {
     for (int i = 0; i < ENV_TABLE_SIZE; i++) {
         float t = (float)i / (float)(ENV_TABLE_SIZE - 1);
 
-        /* 0: Hann window */
+        /* 0: Hann window — all grains use env_shape=0 */
         tables[0][i] = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * t));
-
-        /* 1: Trapezoid - 10% attack, 80% sustain, 10% release */
-        if (t < 0.1f)
-            tables[1][i] = t / 0.1f;
-        else if (t < 0.9f)
-            tables[1][i] = 1.0f;
-        else
-            tables[1][i] = (1.0f - t) / 0.1f;
-
-        /* 2: Triangle */
-        if (t < 0.5f)
-            tables[2][i] = t * 2.0f;
-        else
-            tables[2][i] = (1.0f - t) * 2.0f;
-
-        /* 3: Rectangle with 4-sample fade at edges */
-        if (i < 4)
-            tables[3][i] = (float)(i + 1) / 4.0f;
-        else if (i >= ENV_TABLE_SIZE - 4)
-            tables[3][i] = (float)(ENV_TABLE_SIZE - i) / 4.0f;
-        else
-            tables[3][i] = 1.0f;
     }
+    /* Tables 1-3 kept for ABI compatibility but unused (all grains use Hann) */
 }
 
 /* ============================================================================
@@ -534,6 +527,21 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     mixed[2] = 0.5f * ( taps[0] + taps[1] - taps[2] - taps[3]);
     mixed[3] = 0.5f * ( taps[0] - taps[1] - taps[2] + taps[3]);
 
+    /* Feedback allpass diffusion — adds density and chorus to the tail */
+    float fb_diffused = (mixed[0] + mixed[1] + mixed[2] + mixed[3]) * 0.25f;
+    for (int ap = 0; ap < 2; ap++) {
+        int ap_len = (ap == 0) ? 347 : 461;  /* prime lengths */
+        float mod = sinf(2.0f * (float)M_PI * rev->fb_ap_mod_phase[ap]) * 3.0f;
+        int rd = (rev->fb_ap_pos[ap] - ap_len - (int)mod + 512) & 511;
+        float delayed = rev->fb_ap_buf[ap][rd];
+        float ap_out = delayed - 0.45f * fb_diffused;
+        rev->fb_ap_buf[ap][rev->fb_ap_pos[ap]] = fb_diffused + 0.45f * ap_out;
+        fb_diffused = ap_out;
+        rev->fb_ap_pos[ap] = (rev->fb_ap_pos[ap] + 1) & 511;
+        rev->fb_ap_mod_phase[ap] += ((ap == 0) ? 0.23f : 0.29f) / 44100.0f;
+        if (rev->fb_ap_mod_phase[ap] >= 1.0f) rev->fb_ap_mod_phase[ap] -= 1.0f;
+    }
+
     /* Shimmer: pitch-shift the mixed feedback up one octave.
        Two overlapping grains read at 2x speed from a circular buffer,
        crossfaded with Hann windows for smooth, artifact-free shifting.
@@ -588,6 +596,8 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         fb = rev->lp_state[i];
         /* Inject shimmer — cascading crystalline harmonics */
         fb += shimmer_out * shimmer_level;
+        /* Inject feedback allpass diffusion for lusher tail */
+        fb += fb_diffused * 0.3f;
         /* Safety limiter prevents runaway buildup */
         fb = tanhf(fb * 1.1f) * 0.9f;
         /* Write with input */
@@ -598,6 +608,16 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     /* Raw stereo output from alternating lines */
     float raw_l = (taps[0] + taps[2]) * 0.45f;
     float raw_r = (taps[1] + taps[3]) * 0.45f;
+
+    /* Stereo decorrelation: ~8ms delay on right channel for width */
+    {
+        int stereo_delay = 353;  /* ~8ms at 44100, prime number */
+        rev->stereo_delay_buf[rev->stereo_delay_pos] = raw_r;
+        int stereo_rd = (rev->stereo_delay_pos - stereo_delay + 1024) & 1023;
+        float delayed_r = rev->stereo_delay_buf[stereo_rd];
+        rev->stereo_delay_pos = (rev->stereo_delay_pos + 1) & 1023;
+        raw_r = delayed_r;  /* use delayed version for right */
+    }
 
     /* High-frequency sparkle shelf: gentle boost to upper harmonics.
        One-pole highpass extracts HF content, blend it back in for brightness.
@@ -617,13 +637,6 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
 /* ============================================================================
  * Shared grain helpers
  * ============================================================================ */
-
-static inline int shape_to_env(float shape) {
-    if (shape < 0.25f) return 0;
-    if (shape < 0.50f) return 1;
-    if (shape < 0.75f) return 2;
-    return 3;
-}
 
 static grain_t *find_free_grain(dioramatic_instance_t *inst) {
     for (int i = 0; i < MAX_GRAINS; i++) {
@@ -711,6 +724,12 @@ static void mosaic_tick(dioramatic_instance_t *inst) {
     int trigger_interval = inst->subdivision_samples / min_grains;
     if (trigger_interval < 128) trigger_interval = 128;  /* ~3ms minimum */
 
+    /* Envelope gate: fewer grains when input is quiet */
+    float env_gate = inst->env_follower * 5.0f;
+    if (env_gate > 1.0f) env_gate = 1.0f;
+    trigger_interval = (int)((float)trigger_interval / (0.1f + env_gate * 0.9f));
+    if (trigger_interval < 128) trigger_interval = 128;
+
     inst->trigger_counter++;
     if (inst->trigger_counter >= trigger_interval) {
         inst->trigger_counter = 0;
@@ -760,8 +779,14 @@ static void seq_capture_slices(dioramatic_instance_t *inst) {
 static void seq_tick(dioramatic_instance_t *inst) {
     int sub = inst->subdivision_samples;
 
+    /* Envelope gate: skip triggers when input is very quiet */
+    float env_gate = inst->env_follower * 5.0f;
+    if (env_gate > 1.0f) env_gate = 1.0f;
+    int scaled_sub = (int)((float)sub / (0.1f + env_gate * 0.9f));
+    if (scaled_sub < 441) scaled_sub = 441;
+
     inst->trigger_counter++;
-    if (inst->trigger_counter >= sub) {
+    if (inst->trigger_counter >= scaled_sub) {
         inst->trigger_counter = 0;
 
         /* Every 8 steps, re-capture and re-shuffle */
@@ -841,9 +866,15 @@ static void glide_tick(dioramatic_instance_t *inst) {
     if (grain_len > CAPTURE_SAMPLES - 1) grain_len = CAPTURE_SAMPLES - 1;
     if (grain_len < 441) grain_len = 441;
 
+    /* Envelope gate: skip triggers when input is very quiet */
+    float env_gate = inst->env_follower * 5.0f;
+    if (env_gate > 1.0f) env_gate = 1.0f;
+    int scaled_sub = (int)((float)sub / (0.1f + env_gate * 0.9f));
+    if (scaled_sub < 441) scaled_sub = 441;
+
     /* Trigger overlapping grains at subdivision intervals */
     inst->trigger_counter++;
-    if (inst->trigger_counter >= sub) {
+    if (inst->trigger_counter >= scaled_sub) {
         inst->trigger_counter = 0;
 
         int wp = inst->capture.write_pos;
@@ -879,7 +910,8 @@ static void glide_tick(dioramatic_instance_t *inst) {
 
             init_grain_common(g, inst, start, grain_len, start_speed);
             g->speed_target = target_speed;
-            g->speed_glide_rate = 0.0001f;
+            /* Scale so glide completes within grain duration */
+            g->speed_glide_rate = 4.0f / (float)grain_len;
         }
     }
 }
@@ -891,6 +923,12 @@ static void glide_tick(dioramatic_instance_t *inst) {
 static void haze_tick(dioramatic_instance_t *inst) {
     /* Trigger interval: from ~100ms down to ~0.66ms based on activity */
     int trigger_interval = (int)(441.0f / (1.0f + inst->activity * 14.0f));
+    if (trigger_interval < 1) trigger_interval = 1;
+
+    /* Envelope gate: fewer grains when input is quiet */
+    float env_gate = inst->env_follower * 5.0f;
+    if (env_gate > 1.0f) env_gate = 1.0f;
+    trigger_interval = (int)((float)trigger_interval / (0.1f + env_gate * 0.9f));
     if (trigger_interval < 1) trigger_interval = 1;
 
     inst->haze_counter++;
@@ -1027,21 +1065,25 @@ static void strum_tick(dioramatic_instance_t *inst) {
     int sub = inst->subdivision_samples;
     int wp = inst->capture.write_pos;
 
-    /* Onset detection — read from the sample just written (one behind write_pos) */
+    /* Onset detection using smoothed energy with adaptive threshold */
     int prev_wp = (wp - 1 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-    float rms = fabsf(inst->capture.buffer[prev_wp].l) + fabsf(inst->capture.buffer[prev_wp].r);
+    float sample_energy = inst->capture.buffer[prev_wp].l * inst->capture.buffer[prev_wp].l
+                        + inst->capture.buffer[prev_wp].r * inst->capture.buffer[prev_wp].r;
+    inst->onset_energy += 0.01f * (sample_energy - inst->onset_energy);       /* fast: ~2ms */
+    inst->onset_energy_slow += 0.0002f * (sample_energy - inst->onset_energy_slow); /* slow: ~100ms */
+
     if (inst->onset_debounce > 0) {
         inst->onset_debounce--;
-    } else if (rms > 0.1f && inst->onset_prev_rms < 0.05f) {
+    } else if (inst->onset_energy > inst->onset_energy_slow * 4.0f + 0.001f) {
+        /* Onset: fast energy is 4x the slow average (adapts to signal level) */
         inst->onset_positions[inst->onset_head] = prev_wp;
         inst->onset_head = (inst->onset_head + 1) % 8;
         if (inst->onset_count < 8) inst->onset_count++;
         inst->strum_cascade_step = 0;
         inst->strum_cascade_timer = 0;
         inst->strum_cascade_total = 2 + (int)(inst->repeats * 6.0f);
-        inst->onset_debounce = 4410;  /* ~100ms debounce */
+        inst->onset_debounce = 4410;
     }
-    inst->onset_prev_rms = rms;
 
     if (inst->onset_count == 0) return;
 
@@ -1122,8 +1164,14 @@ static void blocks_tick(dioramatic_instance_t *inst) {
     int sub = inst->subdivision_samples;
     int wp = inst->capture.write_pos;
 
+    /* Envelope gate: skip triggers when input is very quiet */
+    float env_gate = inst->env_follower * 5.0f;
+    if (env_gate > 1.0f) env_gate = 1.0f;
+    int scaled_sub = (int)((float)sub / (0.1f + env_gate * 0.9f));
+    if (scaled_sub < 441) scaled_sub = 441;
+
     inst->trigger_counter++;
-    if (inst->trigger_counter >= sub) {
+    if (inst->trigger_counter >= scaled_sub) {
         inst->trigger_counter = 0;
 
         float prob;
@@ -1210,8 +1258,14 @@ static void interrupt_tick(dioramatic_instance_t *inst) {
         }
     }
 
+    /* Envelope gate: skip triggers when input is very quiet */
+    float env_gate = inst->env_follower * 5.0f;
+    if (env_gate > 1.0f) env_gate = 1.0f;
+    int scaled_sub = (int)((float)sub / (0.1f + env_gate * 0.9f));
+    if (scaled_sub < 441) scaled_sub = 441;
+
     inst->trigger_counter++;
-    if (inst->trigger_counter >= sub) {
+    if (inst->trigger_counter >= scaled_sub) {
         inst->trigger_counter = 0;
 
         float prob = inst->repeats * 0.5f;
@@ -1275,6 +1329,12 @@ static void arp_tick(dioramatic_instance_t *inst) {
     int step_interval = sub / (2 + (int)(inst->activity * 6.0f));
     if (step_interval < 1) step_interval = 1;
 
+    /* Envelope gate: skip triggers when input is very quiet */
+    float env_gate = inst->env_follower * 5.0f;
+    if (env_gate > 1.0f) env_gate = 1.0f;
+    step_interval = (int)((float)step_interval / (0.1f + env_gate * 0.9f));
+    if (step_interval < 1) step_interval = 1;
+
     inst->arp_step_timer++;
     if (inst->arp_step_timer >= step_interval) {
         inst->arp_step_timer = 0;
@@ -1331,12 +1391,6 @@ static void arp_tick(dioramatic_instance_t *inst) {
         }
 
         inst->arp_step++;
-        /* Reset cycle tracking */
-        if (inst->variation == 2) {
-            if (inst->arp_step % 6 == 0) inst->arp_cycle++;
-        } else {
-            if (inst->arp_step % 4 == 0) inst->arp_cycle++;
-        }
     }
 }
 
@@ -1540,6 +1594,18 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
 
     /* Configure delay taps if needed (algorithms 9-10) */
     delay_configure_taps_if_dirty(inst);
+
+    /* Input envelope follower — compute block RMS and smooth */
+    {
+        float block_rms = 0.0f;
+        for (int i = 0; i < frames; i++) {
+            float l = (float)audio_inout[i * 2] / 32768.0f;
+            float r = (float)audio_inout[i * 2 + 1] / 32768.0f;
+            block_rms += l * l + r * r;
+        }
+        block_rms = sqrtf(block_rms / (float)(frames * 2));
+        inst->env_follower += 0.1f * (block_rms - inst->env_follower);  /* ~30ms attack/release */
+    }
 
     /* Handle crossfade midpoint switch */
     /* (crossfade_level goes from 1.0 down to 0.0, then the pending params
