@@ -168,7 +168,7 @@ class DioramaticProcessor extends AudioWorkletProcessor {
 
     // Space -> reverb delay line selection + send amount
     // 0=small room, 1=infinite cathedral
-    const revSend = 0.2 + this.space * 0.75;
+    const revSend = 0.3 + this.space * 0.7;
     const fdnLengths = [
       Math.floor(1087 + this.space * 2500),
       Math.floor(1283 + this.space * 2900),
@@ -238,7 +238,7 @@ class DioramaticProcessor extends AudioWorkletProcessor {
       if (this.cloudTimer >= cloudRate) {
         this.cloudTimer = 0;
         const sp = this.rng() < 0.85 ? 1 : 2;
-        this.triggerGrain(sp, 0.2 + this.sustain * 0.3, cloudLenMs + this.rng() * 20, panWidth);
+        this.triggerGrain(sp, 0.4 + this.sustain * 0.6, cloudLenMs + this.rng() * 20, panWidth);
         // Loud input spawns extra grains for denser texture
         if (inLevel > 0.15 && this.rng() < inLevel * 2) {
           this.triggerGrain(this.rng() < 0.5 ? 1 : 2, 0.15 + this.sustain * 0.2, cloudLenMs * 0.7, panWidth);
@@ -249,9 +249,9 @@ class DioramaticProcessor extends AudioWorkletProcessor {
       this.shimmerGrainTimer++;
       if (this.shimmerGrainTimer >= shimGrainRate) {
         this.shimmerGrainTimer = 0;
-        this.triggerGrain(2, 0.12 + this.shimmer * 0.25, sustainGrainLen + this.rng() * 100, panWidth * 0.8);
+        this.triggerGrain(2, 0.3 + this.shimmer * 0.5, sustainGrainLen + this.rng() * 100, panWidth * 0.8);
         if (this.rng() < 0.15 + this.shimmer * 0.3) {
-          this.triggerGrain(4, 0.2 + this.shimmer * 0.2, 2 + this.rng() * 5, panWidth);
+          this.triggerGrain(4, 0.4 + this.shimmer * 0.3, 2 + this.rng() * 5, panWidth);
         }
         // Loud hits spawn extra shimmer burst
         if (inLevel > 0.2 && this.rng() < inLevel * 1.5) {
@@ -354,8 +354,8 @@ class DioramaticProcessor extends AudioWorkletProcessor {
           this.fdnPos[l] = (this.fdnPos[l] + 1) & (this.fdnSize - 1);
         }
 
-        wetL += (taps[0] + taps[2]) * 0.45 * revSend;
-        wetR += (taps[1] + taps[3]) * 0.45 * revSend;
+        wetL += (taps[0] + taps[2]) * 0.65 * revSend;
+        wetR += (taps[1] + taps[3]) * 0.65 * revSend;
       }
 
       // Mix + soft clip

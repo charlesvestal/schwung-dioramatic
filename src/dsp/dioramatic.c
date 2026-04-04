@@ -301,8 +301,8 @@ static void fdn_process(fdn_reverb_t *rev, float in_l, float in_r,
     }
 
     /* Stereo output with decorrelation */
-    float raw_l = (taps[0] + taps[2]) * 0.45f;
-    float raw_r = (taps[1] + taps[3]) * 0.45f;
+    float raw_l = (taps[0] + taps[2]) * 0.65f;
+    float raw_r = (taps[1] + taps[3]) * 0.65f;
 
     /* Right channel decorrelation (~8ms) */
     rev->stereo_buf[rev->stereo_pos] = raw_r;
@@ -359,7 +359,7 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
     dioramatic_instance_t *inst = (dioramatic_instance_t *)instance;
 
     /* Derive DSP params from musical knobs */
-    float rev_send = 0.2f + inst->space * 0.75f;
+    float rev_send = 0.3f + inst->space * 0.7f;  /* 0.3 to 1.0 */
     int fdn_lengths[4] = {
         1087 + (int)(inst->space * 2500.0f),
         1283 + (int)(inst->space * 2900.0f),
@@ -436,12 +436,12 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         if (inst->cloud_timer >= cloud_rate) {
             inst->cloud_timer = 0;
             float sp = rng_float(&inst->rng_state) < 0.85f ? 1.0f : 2.0f;
-            trigger_grain(inst, sp, 0.2f + inst->sustain * 0.3f,
+            trigger_grain(inst, sp, 0.4f + inst->sustain * 0.6f,
                           cloud_len_ms + rng_float(&inst->rng_state) * 20.0f, pan_width);
             /* Extra grain burst on loud input */
             if (in_level > 0.15f && rng_float(&inst->rng_state) < in_level * 2.0f) {
                 float sp2 = rng_float(&inst->rng_state) < 0.5f ? 1.0f : 2.0f;
-                trigger_grain(inst, sp2, 0.15f + inst->sustain * 0.2f,
+                trigger_grain(inst, sp2, 0.3f + inst->sustain * 0.4f,
                               cloud_len_ms * 0.7f, pan_width);
             }
         }
@@ -450,16 +450,16 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         inst->shimmer_grain_timer++;
         if (inst->shimmer_grain_timer >= shim_grain_rate) {
             inst->shimmer_grain_timer = 0;
-            trigger_grain(inst, 2.0f, 0.12f + inst->shimmer * 0.25f,
+            trigger_grain(inst, 2.0f, 0.3f + inst->shimmer * 0.5f,
                           sustain_grain_len + rng_float(&inst->rng_state) * 100.0f,
                           pan_width * 0.8f);
             if (rng_float(&inst->rng_state) < 0.15f + inst->shimmer * 0.3f) {
-                trigger_grain(inst, 4.0f, 0.2f + inst->shimmer * 0.2f,
+                trigger_grain(inst, 4.0f, 0.4f + inst->shimmer * 0.3f,
                               3.0f + rng_float(&inst->rng_state) * 5.0f, pan_width);
             }
             /* Extra shimmer burst on loud input */
             if (in_level > 0.2f && rng_float(&inst->rng_state) < in_level * 1.5f) {
-                trigger_grain(inst, 2.0f, 0.2f + inst->shimmer * 0.15f,
+                trigger_grain(inst, 2.0f, 0.35f + inst->shimmer * 0.3f,
                               sustain_grain_len * 0.5f, pan_width);
             }
         }
