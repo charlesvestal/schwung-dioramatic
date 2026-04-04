@@ -193,7 +193,7 @@ class DioramaticProcessor extends AudioWorkletProcessor {
     const pitchModDepth = this.drift * 0.15;
     const pitchModRate = 0.05 + this.drift * 0.4;
     const revModDepth = 4 + this.drift * 20;
-    const revFeedback = Math.min(0.97, 0.65 + this.sustain * 0.32);
+    const revFeedback = Math.min(0.999, 1 - 0.3 * Math.pow(1 - this.sustain, 2.5));
     const sustainGrainLen = 50 + this.sustain * 350;
 
     // Reverb damping: derived from warmth (warmer = more damping)
@@ -321,7 +321,7 @@ class DioramaticProcessor extends AudioWorkletProcessor {
       // === FDN REVERB ===
       if (revSend > 0.01) {
         // Input diffusion
-        let diff = (wetL + wetR) * 0.5 * revSend;
+        let diff = (dryL + dryR + wetL + wetR) * 0.5 * revSend;
         for (let a = 0; a < 4; a++) {
           const del = this.apBufs[a][this.apPos[a]];
           const ao = del - 0.5 * diff;
@@ -374,7 +374,8 @@ class DioramaticProcessor extends AudioWorkletProcessor {
           let fb = mx[l] * revFeedback;
           this.fdnLP[l] += damping * (fb - this.fdnLP[l]);
           fb = this.fdnLP[l] + shimOut * shimFeedback;
-          fb = Math.tanh(fb * 1.2) * 0.85;
+          if (fb > 0.7 || fb < -0.7) fb = Math.tanh(fb) * 0.98;
+          else fb *= 0.998;
           this.fdnLines[l][this.fdnPos[l]] = diff + fb;
           this.fdnPos[l] = (this.fdnPos[l] + 1) & (this.fdnSize - 1);
         }

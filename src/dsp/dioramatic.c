@@ -305,7 +305,11 @@ static void fdn_process(fdn_reverb_t *rev, float in_l, float in_r,
         float fb = mx[i] * feedback;
         rev->lp_state[i] += damping * (fb - rev->lp_state[i]);
         fb = rev->lp_state[i] + shim_out * shim_amount + fb_diff * 0.3f;
-        fb = tanhf(fb * 1.1f) * 0.9f;
+        /* Soft limit only kicks in on large signals — transparent below ±0.7 */
+        if (fb > 0.7f || fb < -0.7f)
+            fb = tanhf(fb) * 0.98f;
+        else
+            fb *= 0.998f;  /* negligible loss at normal levels */
         rev->lines[i][rev->write_pos[i]] = diff + fb;
         rev->write_pos[i] = (rev->write_pos[i] + 1) & (FDN_MAX_DELAY - 1);
     }
@@ -395,11 +399,16 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
     float cloud_len_ms = 20.0f + inst->smear * 120.0f;  /* longer grains to compensate for sparsity */
     float cutoff_hz = 200.0f * powf(100.0f, 1.0f - inst->warmth);
     if (cutoff_hz > 20000.0f) cutoff_hz = 20000.0f;
-    float rev_damping = 0.15f + inst->warmth * 0.5f;
+    /* Damping reduced at high sustain so the tail actually sustains.
+       Without this, the LP filter eats the reverb faster than feedback can sustain it. */
+    float rev_damping = (0.15f + inst->warmth * 0.5f) * (1.0f - inst->sustain * 0.7f);
     float pitch_mod_depth = inst->drift * 0.15f;
     float pitch_mod_rate = 0.05f + inst->drift * 0.4f;
     float rev_mod_depth = 4.0f + inst->drift * 20.0f;
-    float rev_feedback = fminf(0.97f, 0.65f + inst->sustain * 0.32f);
+    /* Sustain maps to feedback with an exponential curve so the top end
+       approaches unity. sustain=0: 0.7, sustain=0.5: 0.95, sustain=1: 0.999 */
+    float rev_feedback = 1.0f - (1.0f - 0.7f) * powf(1.0f - inst->sustain, 2.5f);
+    if (rev_feedback > 0.999f) rev_feedback = 0.999f;
     float sustain_grain_len = 50.0f + inst->sustain * 350.0f;
     float pan_width = pan_width_val;
 
@@ -571,10 +580,15 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         wet_l = svf_tick(&inst->svf_l, wet_l, svf_a1, svf_a2, svf_a3);
         wet_r = svf_tick(&inst->svf_r, wet_r, svf_a1, svf_a2, svf_a3);
 
-        /* FDN reverb */
+        /* FDN reverb — processes BOTH dry input AND grains.
+           The dry signal creates the big lush sustained wash.
+           The grains add sparkle/shimmer character on top.
+           This is why it rings out: the reverb has the full input. */
         float rev_l = 0.0f, rev_r = 0.0f;
         if (rev_send > 0.01f) {
-            fdn_process(&inst->reverb, wet_l * rev_send, wet_r * rev_send,
+            float rev_in_l = (dry_l + wet_l) * rev_send;
+            float rev_in_r = (dry_r + wet_r) * rev_send;
+            fdn_process(&inst->reverb, rev_in_l, rev_in_r,
                         &rev_l, &rev_r, fdn_lengths, rev_feedback,
                         rev_damping, shim_feedback, rev_mod_depth);
             wet_l += rev_l;
