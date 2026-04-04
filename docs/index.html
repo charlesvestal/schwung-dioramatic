@@ -454,11 +454,17 @@ async function startBuiltin(url, label) {
 }
 async function loadFile(event) {
   const file = event.target.files[0]; if (!file) return;
-  await initAudio();
-  document.getElementById('file-name').textContent = file.name;
-  document.getElementById('status').textContent = 'Loading...';
-  const ab = await file.arrayBuffer(); const audioBuf = await ctx.decodeAudioData(ab);
-  await playBuffer(audioBuf, file.name, null);
+  try {
+    await initAudio();
+    document.getElementById('file-name').textContent = file.name;
+    document.getElementById('status').textContent = 'Decoding ' + file.name + '...';
+    const ab = await file.arrayBuffer();
+    const audioBuf = await ctx.decodeAudioData(ab);
+    await playBuffer(audioBuf, file.name, null);
+  } catch(e) {
+    document.getElementById('status').textContent = 'Error: ' + e.message;
+    console.error('File load error:', e);
+  }
 }
 async function startMic() {
   await initAudio(); disconnectSource();
