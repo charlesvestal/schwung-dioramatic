@@ -458,21 +458,21 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
 
         if (inst->burst_debounce > 0) inst->burst_debounce--;
 
-        /* Detect transient: fast energy exceeds slow average significantly */
+        /* Detect transient: sensitive threshold, short debounce for continuous response */
         if (inst->burst_debounce == 0 &&
-            inst->burst_energy > inst->burst_energy_slow * 3.0f + 0.001f &&
-            inst->burst_energy > 0.002f) {
+            inst->burst_energy > inst->burst_energy_slow * 2.0f + 0.0005f &&
+            inst->burst_energy > 0.0008f) {
             /* Start a new burst! */
-            int num_grains = 3 + (int)(inst->scatter * 12.0f);  /* 3 to 15 grains */
+            int num_grains = 8 + (int)(inst->scatter * 24.0f);  /* 8 to 32 grains */
             inst->burst_active = num_grains;
             inst->burst_origin = (inst->capture.write_pos - 441 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
             inst->burst_timer = 0;
-            inst->burst_interval = 128;  /* first grain fires almost immediately */
+            inst->burst_interval = 64;   /* first trailing grain fires very quickly */
             inst->burst_count = 0;
-            inst->burst_debounce = 4410;  /* ~100ms between bursts */
+            inst->burst_debounce = 2205;  /* ~50ms — allows rapid bursting on continuous input */
 
-            /* Fire the first few grains IMMEDIATELY — the initial splash */
-            int immediate = 1 + (int)(inst->scatter * 3.0f);  /* 1 to 4 immediate */
+            /* Fire the first grains IMMEDIATELY — the initial splash */
+            int immediate = 2 + (int)(inst->scatter * 6.0f);  /* 2 to 8 immediate */
             for (int g = 0; g < immediate && inst->burst_active > 0; g++) {
                 float speed;
                 float r = rng_float(&inst->rng_state);
@@ -483,8 +483,8 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
                 if (inst->shimmer > 0.5f && rng_float(&inst->rng_state) < inst->shimmer)
                     speed = (rng_float(&inst->rng_state) < 0.5f) ? 2.0f : 4.0f;
 
-                float len = cloud_len_ms + rng_float(&inst->rng_state) * 40.0f;
-                float amp = 0.5f + inst->sustain * 0.4f;
+                float len = cloud_len_ms + rng_float(&inst->rng_state) * 60.0f;
+                float amp = 0.7f + inst->sustain * 0.3f;
                 /* Slight random offset from origin for timbral variation */
                 int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
                 int start_save = inst->capture.write_pos;
@@ -502,9 +502,9 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
             inst->burst_timer++;
             if (inst->burst_timer >= inst->burst_interval) {
                 inst->burst_timer = 0;
-                /* Interval grows exponentially — bouncing ball / comet tail */
-                inst->burst_interval = (int)((float)inst->burst_interval * (1.3f + inst->sustain * 0.5f));
-                if (inst->burst_interval > 44100) inst->burst_interval = 44100;
+                /* Interval grows — comet tail. Slower growth = longer trail */
+                inst->burst_interval = (int)((float)inst->burst_interval * (1.15f + inst->sustain * 0.25f));
+                if (inst->burst_interval > 88200) inst->burst_interval = 88200;
 
                 float speed;
                 float r = rng_float(&inst->rng_state);
@@ -514,9 +514,9 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
                 if (inst->shimmer > 0.5f && rng_float(&inst->rng_state) < inst->shimmer)
                     speed = (rng_float(&inst->rng_state) < 0.5f) ? 2.0f : 4.0f;
 
-                /* Later grains are quieter and darker */
-                float decay = 1.0f / (1.0f + (float)inst->burst_count * 0.15f);
-                float amp = (0.5f + inst->sustain * 0.4f) * decay;
+                /* Later grains are slightly quieter — gentle decay, not fast */
+                float decay = 1.0f / (1.0f + (float)inst->burst_count * 0.06f);
+                float amp = (0.7f + inst->sustain * 0.3f) * decay;
                 float len = cloud_len_ms + rng_float(&inst->rng_state) * 60.0f;
 
                 int offset = (int)(rng_float(&inst->rng_state) * 882.0f);

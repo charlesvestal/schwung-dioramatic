@@ -240,23 +240,22 @@ class DioramaticProcessor extends AudioWorkletProcessor {
 
       // Detect transient
       if (this.burstDebounce === 0 &&
-          this.burstEnergy > this.burstEnergySlow * 3 + 0.001 &&
-          this.burstEnergy > 0.002) {
-        const numGrains = 3 + Math.floor(this.scatter * 12);
+          this.burstEnergy > this.burstEnergySlow * 2 + 0.0005 &&
+          this.burstEnergy > 0.0008) {
+        const numGrains = 8 + Math.floor(this.scatter * 24);
         this.burstActive = numGrains;
         this.burstOrigin = (this.capPos - 441 + this.capSize) % this.capSize;
         this.burstTimer = 0;
-        this.burstInterval = 128;
+        this.burstInterval = 64;
         this.burstCount = 0;
-        this.burstDebounce = 4410;
-        // Immediate splash
-        const immediate = 1 + Math.floor(this.scatter * 3);
+        this.burstDebounce = 2205;
+        const immediate = 2 + Math.floor(this.scatter * 6);
         for (let g = 0; g < immediate && this.burstActive > 0; g++) {
           let sp = this.rng() < 0.4 ? 1 : (this.rng() < 0.7 ? 2 : 4);
           if (this.shimmer > 0.5 && this.rng() < this.shimmer)
             sp = this.rng() < 0.5 ? 2 : 4;
-          const len = cloudLenMs + this.rng() * 40;
-          const amp = 0.5 + this.sustain * 0.4;
+          const len = cloudLenMs + this.rng() * 60;
+          const amp = 0.7 + this.sustain * 0.3;
           const saveCap = this.capPos;
           this.capPos = (this.burstOrigin + Math.floor(this.rng() * 882)) % this.capSize;
           this.triggerGrain(sp, amp, len, panWidth);
@@ -270,12 +269,12 @@ class DioramaticProcessor extends AudioWorkletProcessor {
         this.burstTimer++;
         if (this.burstTimer >= this.burstInterval) {
           this.burstTimer = 0;
-          this.burstInterval = Math.min(44100, Math.floor(this.burstInterval * (1.3 + this.sustain * 0.5)));
+          this.burstInterval = Math.min(88200, Math.floor(this.burstInterval * (1.15 + this.sustain * 0.25)));
           let sp = this.rng() < 0.3 ? 1 : (this.rng() < 0.6 ? 2 : 4);
           if (this.shimmer > 0.5 && this.rng() < this.shimmer)
             sp = this.rng() < 0.5 ? 2 : 4;
-          const decay = 1 / (1 + this.burstCount * 0.15);
-          const amp = (0.5 + this.sustain * 0.4) * decay;
+          const decay = 1 / (1 + this.burstCount * 0.06);
+          const amp = (0.7 + this.sustain * 0.3) * decay;
           const len = cloudLenMs + this.rng() * 60;
           const saveCap = this.capPos;
           this.capPos = (this.burstOrigin + Math.floor(this.rng() * 882)) % this.capSize;
