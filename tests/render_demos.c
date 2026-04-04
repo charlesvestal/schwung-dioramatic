@@ -267,11 +267,12 @@ typedef struct {
 } preset_t;
 
 static void render_preset(audio_fx_api_v2_t *api, const preset_t *preset,
-                          int16_t *input, int total_frames, const char *output_dir) {
+                          int16_t *input, int input_frames, int tail_frames,
+                          const char *output_dir) {
     void *inst = api->create_instance(NULL, NULL);
     api->set_param(inst, "state", preset->state);
 
-    /* Allocate output buffer (stereo interleaved) */
+    int total_frames = input_frames + tail_frames;
     int total_samples = total_frames * 2;
     int16_t *output = (int16_t *)malloc(total_samples * sizeof(int16_t));
 
@@ -281,8 +282,19 @@ static void render_preset(audio_fx_api_v2_t *api, const preset_t *preset,
         int chunk = 128;
         if (frames_done + chunk > total_frames) chunk = total_frames - frames_done;
 
-        /* Copy input block */
-        memcpy(&output[frames_done * 2], &input[frames_done * 2], chunk * 2 * sizeof(int16_t));
+        if (frames_done < input_frames) {
+            /* Copy input block (signal portion) */
+            int avail = input_frames - frames_done;
+            if (avail > chunk) avail = chunk;
+            memcpy(&output[frames_done * 2], &input[frames_done * 2], avail * 2 * sizeof(int16_t));
+            /* Zero-fill if chunk extends past input */
+            if (avail < chunk) {
+                memset(&output[(frames_done + avail) * 2], 0, (chunk - avail) * 2 * sizeof(int16_t));
+            }
+        } else {
+            /* Tail portion: feed silence to let effects ring out */
+            memset(&output[frames_done * 2], 0, chunk * 2 * sizeof(int16_t));
+        }
 
         api->process_block(inst, &output[frames_done * 2], chunk);
         frames_done += chunk;
@@ -310,19 +322,22 @@ int main(void) {
     snprintf(cmd, sizeof(cmd), "mkdir -p '%s'", output_dir);
     system(cmd);
 
-    /* 8 seconds of audio at 44100 Hz */
-    int duration_sec = 8;
-    int total_frames = 44100 * duration_sec;
-    int16_t *input = (int16_t *)malloc(total_frames * 2 * sizeof(int16_t));
+    /* 16 seconds of musical input + 10 seconds of tail (silence) */
+    int input_sec = 16;
+    int tail_sec = 10;
+    int input_frames = 44100 * input_sec;
+    int tail_frames = 44100 * tail_sec;
+    int total_frames = input_frames + tail_frames;
+    int16_t *input = (int16_t *)malloc(input_frames * 2 * sizeof(int16_t));
 
-    printf("Generating %d seconds of musical input...\n", duration_sec);
-    generate_musical_input(input, total_frames);
+    printf("Generating %d seconds of musical input + %d seconds tail...\n", input_sec, tail_sec);
+    generate_musical_input(input, input_frames);
 
-    /* Save dry input */
+    /* Save dry input (no tail needed) */
     {
         char path[512];
         snprintf(path, sizeof(path), "%s/00-dry-input.wav", output_dir);
-        write_wav(path, input, total_frames * 2);
+        write_wav(path, input, input_frames * 2);
         printf("  Wrote: %s\n", path);
     }
 
@@ -335,140 +350,87 @@ int main(void) {
      * - Filter < 0.8 tames harshness
      * - Activity/Repeats in the 0.5-0.8 range sound best
      */
+    /* Presets exploring "space crystal smearing across space-time,
+       voices of angels carrying music to a new dimension."
+       Built from the user's favorites: Tunnel overtones, Mosaic reverse,
+       ambient wash, Haze shimmer, and Blocks pitch-glitch for dynamism. */
+    /* All Ethereal algorithm (11) — exploring the parameter space.
+       Activity = sparse/delicate ↔ thick/enveloping
+       Filter = warm glow ↔ bright crystal
+       Repeats = distinct events ↔ continuous wash
+       Variation = A balanced, B cloud, C drone, D sparkle */
     preset_t presets[] = {
-        /* === MOSAIC BANK (the signature sound) === */
-        {"01-mosaic-A-shimmer",
-         "{\"algorithm\":0,\"variation\":0,\"activity\":0.65,\"repeats\":0.7,"
-         "\"shape\":1.0,\"filter\":0.85,\"mix\":0.65,\"space\":0.4,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.15,\"pitch_mod_rate\":0.25,"
-         "\"filter_res\":0.1,\"reverb_mode\":2,\"reverse\":0,\"hold\":0}"},
+        /* === THE SWEET SPOT — balanced, musical, immediately beautiful === */
+        {"01-ethereal-A-sweetspot",
+         "{\"algorithm\":11,\"variation\":0,\"activity\":0.6,\"repeats\":0.7,"
+         "\"shape\":1.0,\"filter\":0.7,\"mix\":0.75,\"space\":0.75,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.06,"
+         "\"filter_res\":0.15,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
-        {"02-mosaic-D-fullrange",
-         "{\"algorithm\":0,\"variation\":3,\"activity\":0.75,\"repeats\":0.75,"
-         "\"shape\":1.0,\"filter\":0.9,\"mix\":0.7,\"space\":0.5,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.18,\"pitch_mod_rate\":0.2,"
-         "\"filter_res\":0.05,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+        /* === ACTIVITY SWEEP — sparse to dense === */
+        {"02-ethereal-sparse-delicate",
+         "{\"algorithm\":11,\"variation\":0,\"activity\":0.25,\"repeats\":0.6,"
+         "\"shape\":1.0,\"filter\":0.75,\"mix\":0.7,\"space\":0.75,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.05,"
+         "\"filter_res\":0.1,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
-        {"03-mosaic-B-dark-octavedown",
-         "{\"algorithm\":0,\"variation\":1,\"activity\":0.5,\"repeats\":0.75,"
-         "\"shape\":1.0,\"filter\":0.45,\"mix\":0.7,\"space\":0.55,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.2,\"pitch_mod_rate\":0.12,"
-         "\"filter_res\":0.35,\"reverb_mode\":1,\"reverse\":0,\"hold\":0}"},
-
-        /* === SHAPE LFO DEMOS === */
-        {"04-mosaic-square-gate",
-         "{\"algorithm\":0,\"variation\":0,\"activity\":0.6,\"repeats\":0.65,"
-         "\"shape\":0.12,\"filter\":1.0,\"mix\":0.75,\"space\":0.35,"
-         "\"time_div\":0,\"pitch_mod_depth\":0.0,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.0,\"reverb_mode\":0,\"reverse\":0,\"hold\":0}"},
-
-        {"05-haze-triangle-swell",
-         "{\"algorithm\":3,\"variation\":0,\"activity\":0.7,\"repeats\":0.65,"
-         "\"shape\":0.6,\"filter\":0.85,\"mix\":0.7,\"space\":0.45,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.1,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.15,\"reverb_mode\":2,\"reverse\":0,\"hold\":0}"},
-
-        /* === GRANULES BANK === */
-        {"06-haze-A-diffuse",
-         "{\"algorithm\":3,\"variation\":0,\"activity\":0.75,\"repeats\":0.6,"
-         "\"shape\":1.0,\"filter\":0.75,\"mix\":0.6,\"space\":0.45,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.12,\"pitch_mod_rate\":0.35,"
-         "\"filter_res\":0.2,\"reverb_mode\":2,\"reverse\":0,\"hold\":0}"},
-
-        {"07-haze-C-shimmer",
-         "{\"algorithm\":3,\"variation\":2,\"activity\":0.8,\"repeats\":0.65,"
-         "\"shape\":1.0,\"filter\":0.9,\"mix\":0.65,\"space\":0.55,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.0,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
-
-        {"08-tunnel-B-overtones",
-         "{\"algorithm\":4,\"variation\":1,\"activity\":0.65,\"repeats\":0.75,"
-         "\"shape\":1.0,\"filter\":0.65,\"mix\":0.65,\"space\":0.5,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.1,\"pitch_mod_rate\":0.12,"
-         "\"filter_res\":0.25,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
-
-        /* === MICRO LOOP BANK === */
-        {"09-glide-C-updown",
-         "{\"algorithm\":2,\"variation\":2,\"activity\":0.6,\"repeats\":0.7,"
-         "\"shape\":1.0,\"filter\":0.85,\"mix\":0.6,\"space\":0.4,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.05,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.1,\"reverb_mode\":2,\"reverse\":0,\"hold\":0}"},
-
-        {"10-seq-B-halftime",
-         "{\"algorithm\":1,\"variation\":1,\"activity\":0.7,\"repeats\":0.6,"
-         "\"shape\":1.0,\"filter\":0.9,\"mix\":0.6,\"space\":0.35,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.0,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.0,\"reverb_mode\":0,\"reverse\":0,\"hold\":0}"},
-
-        {"11-strum-C-cascade",
-         "{\"algorithm\":5,\"variation\":2,\"activity\":0.7,\"repeats\":0.7,"
-         "\"shape\":1.0,\"filter\":0.9,\"mix\":0.65,\"space\":0.4,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.0,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.0,\"reverb_mode\":0,\"reverse\":0,\"hold\":0}"},
-
-        /* === GLITCH BANK === */
-        {"12-blocks-C-pitchglitch",
-         "{\"algorithm\":6,\"variation\":2,\"activity\":0.75,\"repeats\":0.6,"
-         "\"shape\":1.0,\"filter\":1.0,\"mix\":0.55,\"space\":0.3,"
-         "\"time_div\":0,\"pitch_mod_depth\":0.0,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.0,\"reverb_mode\":0,\"reverse\":0,\"hold\":0}"},
-
-        {"13-interrupt-A-subtle",
-         "{\"algorithm\":7,\"variation\":0,\"activity\":0.5,\"repeats\":0.6,"
-         "\"shape\":1.0,\"filter\":0.9,\"mix\":0.5,\"space\":0.45,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.0,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.0,\"reverb_mode\":2,\"reverse\":0,\"hold\":0}"},
-
-        {"14-arp-A-ascending",
-         "{\"algorithm\":8,\"variation\":0,\"activity\":0.65,\"repeats\":0.6,"
-         "\"shape\":1.0,\"filter\":0.9,\"mix\":0.65,\"space\":0.35,"
-         "\"time_div\":0,\"pitch_mod_depth\":0.0,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.0,\"reverb_mode\":0,\"reverse\":0,\"hold\":0}"},
-
-        {"15-arp-C-updown-reverbed",
-         "{\"algorithm\":8,\"variation\":2,\"activity\":0.7,\"repeats\":0.65,"
-         "\"shape\":1.0,\"filter\":0.85,\"mix\":0.7,\"space\":0.5,"
-         "\"time_div\":0,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.1,\"reverb_mode\":2,\"reverse\":0,\"hold\":0}"},
-
-        /* === MULTI DELAY BANK === */
-        {"16-pattern-A-clean",
-         "{\"algorithm\":9,\"variation\":0,\"activity\":0.45,\"repeats\":0.4,"
-         "\"shape\":1.0,\"filter\":0.9,\"mix\":0.5,\"space\":0.25,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.0,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.0,\"reverb_mode\":0,\"reverse\":0,\"hold\":0}"},
-
-        {"17-pattern-B-dotted",
-         "{\"algorithm\":9,\"variation\":1,\"activity\":0.5,\"repeats\":0.45,"
-         "\"shape\":1.0,\"filter\":0.85,\"mix\":0.55,\"space\":0.35,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.0,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.0,\"reverb_mode\":2,\"reverse\":0,\"hold\":0}"},
-
-        {"18-warp-C-pitchfilter",
-         "{\"algorithm\":10,\"variation\":2,\"activity\":0.5,\"repeats\":0.4,"
-         "\"shape\":1.0,\"filter\":0.85,\"mix\":0.5,\"space\":0.35,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.0,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.0,\"reverb_mode\":1,\"reverse\":0,\"hold\":0}"},
-
-        /* === SHOWCASE PRESETS === */
-        {"19-ambient-wash",
-         "{\"algorithm\":0,\"variation\":3,\"activity\":0.85,\"repeats\":0.85,"
-         "\"shape\":1.0,\"filter\":0.55,\"mix\":0.8,\"space\":0.85,"
-         "\"time_div\":4,\"pitch_mod_depth\":0.1,\"pitch_mod_rate\":0.08,"
+        {"03-ethereal-dense-enveloping",
+         "{\"algorithm\":11,\"variation\":0,\"activity\":0.9,\"repeats\":0.85,"
+         "\"shape\":1.0,\"filter\":0.65,\"mix\":0.85,\"space\":0.85,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.1,\"pitch_mod_rate\":0.05,"
          "\"filter_res\":0.2,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
-        {"20-mosaic-A-reverse",
-         "{\"algorithm\":0,\"variation\":0,\"activity\":0.6,\"repeats\":0.7,"
-         "\"shape\":1.0,\"filter\":0.85,\"mix\":0.65,\"space\":0.45,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.12,\"pitch_mod_rate\":0.25,"
-         "\"filter_res\":0.1,\"reverb_mode\":2,\"reverse\":1,\"hold\":0}"},
+        /* === FILTER SWEEP — warm amber to bright crystal === */
+        {"04-ethereal-warm-glow",
+         "{\"algorithm\":11,\"variation\":0,\"activity\":0.6,\"repeats\":0.7,"
+         "\"shape\":1.0,\"filter\":0.45,\"mix\":0.75,\"space\":0.8,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.06,"
+         "\"filter_res\":0.3,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+
+        {"05-ethereal-bright-crystal",
+         "{\"algorithm\":11,\"variation\":0,\"activity\":0.6,\"repeats\":0.7,"
+         "\"shape\":1.0,\"filter\":0.9,\"mix\":0.75,\"space\":0.8,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.06,"
+         "\"filter_res\":0.05,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+
+        /* === FOUR VARIATIONS === */
+        {"06-ethereal-B-cloud-wash",
+         "{\"algorithm\":11,\"variation\":1,\"activity\":0.65,\"repeats\":0.75,"
+         "\"shape\":1.0,\"filter\":0.65,\"mix\":0.8,\"space\":0.8,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.06,"
+         "\"filter_res\":0.2,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+
+        {"07-ethereal-C-angel-drone",
+         "{\"algorithm\":11,\"variation\":2,\"activity\":0.65,\"repeats\":0.8,"
+         "\"shape\":1.0,\"filter\":0.6,\"mix\":0.8,\"space\":0.85,"
+         "\"time_div\":4,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.04,"
+         "\"filter_res\":0.2,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+
+        {"08-ethereal-D-crystal-sparkle",
+         "{\"algorithm\":11,\"variation\":3,\"activity\":0.7,\"repeats\":0.7,"
+         "\"shape\":1.0,\"filter\":0.8,\"mix\":0.75,\"space\":0.75,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.08,"
+         "\"filter_res\":0.1,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+
+        /* === SHOWCASE — pushing the boundaries === */
+        {"09-ethereal-event-horizon",
+         "{\"algorithm\":11,\"variation\":0,\"activity\":0.95,\"repeats\":0.9,"
+         "\"shape\":1.0,\"filter\":0.5,\"mix\":0.9,\"space\":0.95,"
+         "\"time_div\":4,\"pitch_mod_depth\":0.12,\"pitch_mod_rate\":0.03,"
+         "\"filter_res\":0.25,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+
+        {"10-ethereal-hall-bright",
+         "{\"algorithm\":11,\"variation\":0,\"activity\":0.6,\"repeats\":0.7,"
+         "\"shape\":1.0,\"filter\":0.8,\"mix\":0.7,\"space\":0.65,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.06,"
+         "\"filter_res\":0.1,\"reverb_mode\":2,\"reverse\":0,\"hold\":0}"},
     };
 
     int num_presets = sizeof(presets) / sizeof(presets[0]);
-    printf("\nRendering %d presets through %d seconds of audio...\n\n", num_presets, duration_sec);
+    printf("\nRendering %d presets (%ds input + %ds tail = %ds each)...\n\n", num_presets, input_sec, tail_sec, input_sec + tail_sec);
 
     for (int i = 0; i < num_presets; i++) {
-        render_preset(api, &presets[i], input, total_frames, output_dir);
+        render_preset(api, &presets[i], input, input_frames, tail_frames, output_dir);
     }
 
     printf("\nDone! %d WAV files saved to %s\n", num_presets + 1, output_dir);
