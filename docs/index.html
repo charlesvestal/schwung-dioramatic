@@ -178,17 +178,15 @@ class DioramaticProcessor extends AudioWorkletProcessor {
 
     // Shimmer -> octave-up feedback in reverb + bright grain rate
     // 0=natural reverb, 1=cascading crystal harmonics
-    // Scatter -> grain density multiplier + stereo spread
-    // Low = few focused grains. High = many grains scattered wide.
-    const density = 0.2 + this.scatter * 0.8;
+    // Scatter -> grain density + stereo spread. Even at max, individual events.
+    const density = 0.1 + this.scatter * 0.9;
     const panWidth = this.scatter;
 
     const shimFeedback = this.shimmer * 0.12;
-    const shimGrainRate = this.shimmer > 0.1 ? Math.max(128, Math.floor(8000 / ((0.3 + this.shimmer * 4) * density))) : 999999;
+    const shimGrainRate = this.shimmer > 0.1 ? Math.max(4410, Math.floor(44100 / (0.5 + this.shimmer * 2.5 * density))) : 999999;
 
-    // Smear -> grain cloud base rate + grain length
-    const cloudRate = this.smear > 0.05 ? Math.max(128, Math.floor(6000 / ((0.2 + this.smear * 6) * density))) : 999999;
-    const cloudLenMs = 15 + this.smear * 80;
+    const cloudRate = this.smear > 0.05 ? Math.max(4410, Math.floor(44100 / (0.7 + this.smear * 3 * density))) : 999999;
+    const cloudLenMs = 20 + this.smear * 120;
 
     const cutHz = Math.min(20000, 200 * Math.pow(100, 1 - this.warmth));
     const pitchModDepth = this.drift * 0.15;

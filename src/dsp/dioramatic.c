@@ -367,18 +367,22 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         1663 + (int)(inst->space * 3900.0f)
     };
     /* Scatter controls overall grain density + stereo spread.
-       Low = few focused grains. High = many grains scattered wide. */
-    float density = 0.2f + inst->scatter * 0.8f;  /* 0.2 to 1.0 */
+       Even at max: individual grains, not a wall. Like sparks from a comet.
+       Low scatter = one grain every ~2 seconds
+       Max scatter = ~4 grains/second (still distinct events) */
+    float density = 0.1f + inst->scatter * 0.9f;
     float pan_width_val = inst->scatter;
 
     float shim_feedback = inst->shimmer * 0.12f;
+    /* Shimmer grain rate: ~one per 2s at min, ~one per 300ms at max */
     int shim_grain_rate = inst->shimmer > 0.1f
-        ? (int)(8000.0f / ((0.3f + inst->shimmer * 4.0f) * density)) : 999999;
-    if (shim_grain_rate < 128) shim_grain_rate = 128;
+        ? (int)(44100.0f / (0.5f + inst->shimmer * 2.5f * density)) : 999999;
+    if (shim_grain_rate < 4410) shim_grain_rate = 4410;  /* minimum 100ms apart */
+    /* Cloud grain rate: ~one per 1.5s at min, ~one per 250ms at max */
     int cloud_rate = inst->smear > 0.05f
-        ? (int)(6000.0f / ((0.2f + inst->smear * 6.0f) * density)) : 999999;
-    if (cloud_rate < 128) cloud_rate = 128;
-    float cloud_len_ms = 15.0f + inst->smear * 80.0f;
+        ? (int)(44100.0f / (0.7f + inst->smear * 3.0f * density)) : 999999;
+    if (cloud_rate < 4410) cloud_rate = 4410;
+    float cloud_len_ms = 20.0f + inst->smear * 120.0f;  /* longer grains to compensate for sparsity */
     float cutoff_hz = 200.0f * powf(100.0f, 1.0f - inst->warmth);
     if (cutoff_hz > 20000.0f) cutoff_hz = 20000.0f;
     float rev_damping = 0.15f + inst->warmth * 0.5f;
