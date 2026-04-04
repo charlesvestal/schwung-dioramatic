@@ -114,9 +114,6 @@ typedef struct {
     /* DC blocker */
     float dc_prev_in_l, dc_prev_in_r, dc_prev_out_l, dc_prev_out_r;
 
-    /* Envelope follower — grains respond to input dynamics */
-    float env_follower;
-    float env_follower_slow;  /* slow release for grain trailing */
 } dioramatic_instance_t;
 
 /* ============================================================================
@@ -395,34 +392,18 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
 
     float lfo_inc = pitch_mod_rate / (float)SAMPLE_RATE;
 
-    /* Envelope follower — compute block RMS for grain gating */
-    float block_rms = 0.0f;
-    for (int i = 0; i < frames; i++) {
-        float l = (float)audio_inout[i * 2] / 32768.0f;
-        float r = (float)audio_inout[i * 2 + 1] / 32768.0f;
-        block_rms += l * l + r * r;
-    }
-    block_rms = sqrtf(block_rms / (float)(frames * 2));
-    /* Grain trailing release matched to Sustain.
-       Space controls reverb size independently.
-       At high sustain, grains keep re-triggering for many seconds
-       after input stops, getting sparser and darker over time. */
-    float tail_factor = inst->sustain;
-    float fast_release = 0.005f - tail_factor * 0.0045f;       /* 0.005 → 0.0005 */
-    float slow_release = 0.001f - tail_factor * 0.00095f;      /* 0.001 → 0.00005 (~20s at max) */
-    if (fast_release < 0.0005f) fast_release = 0.0005f;
-    if (slow_release < 0.0001f) slow_release = 0.0001f;
-
-    if (block_rms > inst->env_follower)
-        inst->env_follower += 0.3f * (block_rms - inst->env_follower);
-    else
-        inst->env_follower += fast_release * (block_rms - inst->env_follower);
-    if (block_rms > inst->env_follower_slow)
-        inst->env_follower_slow += 0.1f * (block_rms - inst->env_follower_slow);
-    else
-        inst->env_follower_slow += slow_release * (block_rms - inst->env_follower_slow);
-
-    float env_gate = fminf(1.0f, inst->env_follower_slow * 5.0f);
+    /* No envelope gating — grains fire continuously at the rate set by
+       Smear and Shimmer knobs. They read from the capture buffer which
+       contains whatever was last played. When input stops, the grains
+       keep reading the last captured audio and the reverb tail carries
+       them. The natural decay comes from:
+       1. Per-grain Hann envelope (each grain fades itself)
+       2. Per-grain darkening filter (each grain gets warmer over its life)
+       3. The reverb tail decaying based on Sustain
+       4. The capture buffer eventually containing silence
+       This creates the wind-chime effect: grains ring out from the last
+       sound you played, getting darker, carried by reverb, until the
+       capture buffer is all silence and new grains produce nothing. */
 
     for (int i = 0; i < frames; i++) {
         float dry_l = (float)audio_inout[i * 2] / 32768.0f;
@@ -441,38 +422,39 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
 
         /* === GRAIN TRIGGERS === */
 
-        /* Cloud grains (Smear): short grains forming a wash.
-           As input fades, grains get sparser AND darker — like a wind chime
-           slowing down. Trigger interval stretches as env_gate drops. */
-        {
-            float gate_stretch = (env_gate > 0.01f) ? (1.0f / env_gate) : 100.0f;
-            int effective_cloud_rate = (int)((float)cloud_rate * fminf(gate_stretch, 50.0f));
-            inst->cloud_timer++;
-            if (inst->cloud_timer >= effective_cloud_rate && env_gate > 0.005f) {
-                inst->cloud_timer = 0;
-                float sp = rng_float(&inst->rng_state) < 0.85f ? 1.0f : 2.0f;
-                float amp = (0.2f + inst->sustain * 0.3f) * sqrtf(env_gate);
-                trigger_grain(inst, sp, amp, cloud_len_ms + rng_float(&inst->rng_state) * 20.0f, pan_width);
+        /* Input level — loud hits spawn extra grains for denser texture */
+        float in_level = fabsf(dry_l) + fabsf(dry_r);
+
+        /* Cloud grains (Smear): fire continuously at the set rate */
+        inst->cloud_timer++;
+        if (inst->cloud_timer >= cloud_rate) {
+            inst->cloud_timer = 0;
+            float sp = rng_float(&inst->rng_state) < 0.85f ? 1.0f : 2.0f;
+            trigger_grain(inst, sp, 0.2f + inst->sustain * 0.3f,
+                          cloud_len_ms + rng_float(&inst->rng_state) * 20.0f, pan_width);
+            /* Extra grain burst on loud input */
+            if (in_level > 0.15f && rng_float(&inst->rng_state) < in_level * 2.0f) {
+                float sp2 = rng_float(&inst->rng_state) < 0.5f ? 1.0f : 2.0f;
+                trigger_grain(inst, sp2, 0.15f + inst->sustain * 0.2f,
+                              cloud_len_ms * 0.7f, pan_width);
             }
         }
 
-        /* Shimmer grains: same wind-chime trailing behavior.
-           Gets sparser and softer as input fades. */
-        {
-            float gate_stretch = (env_gate > 0.01f) ? (1.0f / env_gate) : 100.0f;
-            int effective_shim_rate = (int)((float)shim_grain_rate * fminf(gate_stretch, 50.0f));
-            inst->shimmer_grain_timer++;
-            if (inst->shimmer_grain_timer >= effective_shim_rate && env_gate > 0.005f) {
-                inst->shimmer_grain_timer = 0;
-                float amp = (0.12f + inst->shimmer * 0.25f) * sqrtf(env_gate);
-                trigger_grain(inst, 2.0f, amp,
-                              sustain_grain_len + rng_float(&inst->rng_state) * 100.0f,
-                              pan_width * 0.8f);
-                /* Occasional bright ping — rarer as it fades */
-                if (rng_float(&inst->rng_state) < (0.15f + inst->shimmer * 0.3f) * env_gate) {
-                    trigger_grain(inst, 4.0f, (0.2f + inst->shimmer * 0.2f) * sqrtf(env_gate),
-                                  3.0f + rng_float(&inst->rng_state) * 5.0f, pan_width);
-                }
+        /* Shimmer grains: fire continuously */
+        inst->shimmer_grain_timer++;
+        if (inst->shimmer_grain_timer >= shim_grain_rate) {
+            inst->shimmer_grain_timer = 0;
+            trigger_grain(inst, 2.0f, 0.12f + inst->shimmer * 0.25f,
+                          sustain_grain_len + rng_float(&inst->rng_state) * 100.0f,
+                          pan_width * 0.8f);
+            if (rng_float(&inst->rng_state) < 0.15f + inst->shimmer * 0.3f) {
+                trigger_grain(inst, 4.0f, 0.2f + inst->shimmer * 0.2f,
+                              3.0f + rng_float(&inst->rng_state) * 5.0f, pan_width);
+            }
+            /* Extra shimmer burst on loud input */
+            if (in_level > 0.2f && rng_float(&inst->rng_state) < in_level * 1.5f) {
+                trigger_grain(inst, 2.0f, 0.2f + inst->shimmer * 0.15f,
+                              sustain_grain_len * 0.5f, pan_width);
             }
         }
 

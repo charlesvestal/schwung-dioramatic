@@ -93,8 +93,6 @@ class DioramaticProcessor extends AudioWorkletProcessor {
     }
     this.cloudTimer = 0;
     this.shimmerGrainTimer = 0;
-    this.envFollower = 0;
-    this.envFollowerSlow = 0;
 
     // FDN Reverb
     this.fdnSize = 8192;
@@ -220,9 +218,8 @@ class DioramaticProcessor extends AudioWorkletProcessor {
     // LFO
     const lfoInc = pitchModRate / this.sr;
 
-    // Envelope follower — release matched to sustain (not space)
-    const tailFactor = this.sustain;
-    const slowRel = Math.max(0.00005, 0.001 - tailFactor * 0.00095);
+    // No envelope gating — grains fire continuously. Input level
+    // adds density on loud hits (more grains, not gated grains).
 
     for (let i = 0; i < N; i++) {
       const dryL = inL[i] * 0.7;
@@ -233,13 +230,8 @@ class DioramaticProcessor extends AudioWorkletProcessor {
       this.capR[this.capPos] = dryR;
       this.capPos = (this.capPos + 1) % this.capSize;
 
-      // Envelope follower
+      // Input level for density boost on loud hits
       const inLevel = Math.abs(dryL) + Math.abs(dryR);
-      if (inLevel > this.envFollower) this.envFollower += 0.3 * (inLevel - this.envFollower);
-      else this.envFollower += 0.005 * (inLevel - this.envFollower);
-      if (inLevel > this.envFollowerSlow) this.envFollowerSlow += 0.1 * (inLevel - this.envFollowerSlow);
-      else this.envFollowerSlow += slowRel * (inLevel - this.envFollowerSlow);
-      const envGate = Math.min(1, this.envFollowerSlow * 5);
 
       // Pitch mod LFO
       const lfoVal = Math.sin(2 * Math.PI * this.lfoPhase);
@@ -249,22 +241,29 @@ class DioramaticProcessor extends AudioWorkletProcessor {
 
       // === GRAIN TRIGGERS ===
 
-      // Cloud grains: wind-chime trailing — sparser as input fades
-      const gateStretch = envGate > 0.01 ? 1/envGate : 100;
+      // Cloud grains: fire continuously, extra grains on loud input
       this.cloudTimer++;
-      if (this.cloudTimer >= cloudRate * Math.min(gateStretch, 50) && envGate > 0.005) {
+      if (this.cloudTimer >= cloudRate) {
         this.cloudTimer = 0;
         const sp = this.rng() < 0.85 ? 1 : 2;
-        this.triggerGrain(sp, (0.2 + this.sustain * 0.3) * Math.sqrt(envGate), cloudLenMs + this.rng() * 20, panWidth);
+        this.triggerGrain(sp, 0.2 + this.sustain * 0.3, cloudLenMs + this.rng() * 20, panWidth);
+        // Loud input spawns extra grains for denser texture
+        if (inLevel > 0.15 && this.rng() < inLevel * 2) {
+          this.triggerGrain(this.rng() < 0.5 ? 1 : 2, 0.15 + this.sustain * 0.2, cloudLenMs * 0.7, panWidth);
+        }
       }
 
-      // Shimmer grains: same wind-chime trailing
+      // Shimmer grains: fire continuously, extra sparkle on loud input
       this.shimmerGrainTimer++;
-      if (this.shimmerGrainTimer >= shimGrainRate * Math.min(gateStretch, 50) && envGate > 0.005) {
+      if (this.shimmerGrainTimer >= shimGrainRate) {
         this.shimmerGrainTimer = 0;
-        this.triggerGrain(2, (0.12 + this.shimmer * 0.25) * Math.sqrt(envGate), sustainGrainLen + this.rng() * 100, panWidth * 0.8);
-        if (this.rng() < (0.15 + this.shimmer * 0.3) * envGate) {
-          this.triggerGrain(4, (0.2 + this.shimmer * 0.2) * Math.sqrt(envGate), 2 + this.rng() * 5, panWidth);
+        this.triggerGrain(2, 0.12 + this.shimmer * 0.25, sustainGrainLen + this.rng() * 100, panWidth * 0.8);
+        if (this.rng() < 0.15 + this.shimmer * 0.3) {
+          this.triggerGrain(4, 0.2 + this.shimmer * 0.2, 2 + this.rng() * 5, panWidth);
+        }
+        // Loud hits spawn extra shimmer burst
+        if (inLevel > 0.2 && this.rng() < inLevel * 1.5) {
+          this.triggerGrain(2, 0.2 + this.shimmer * 0.15, sustainGrainLen * 0.5, panWidth);
         }
       }
 
