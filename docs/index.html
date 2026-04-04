@@ -5,516 +5,203 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dioramatic</title>
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, sans-serif; background: #0a0a1a; color: #c0c0d0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 20px; }
-h1 { font-size: 24px; font-weight: 300; letter-spacing: 4px; margin-bottom: 4px; color: #e0e0f0; }
-.subtitle { font-size: 12px; color: #606080; margin-bottom: 20px; letter-spacing: 2px; }
-.source-section { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; justify-content: center; }
-button { background: #1a1a3a; color: #a0a0d0; border: 1px solid #2a2a5a; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 12px; letter-spacing: 1px; }
-button:hover { background: #2a2a5a; }
-button.active { background: #3030a0; border-color: #5050c0; color: #fff; }
-.file-row { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; justify-content: center; flex-wrap: wrap; }
-.file-row label { background: #1a1a3a; color: #a0a0d0; border: 1px solid #2a2a5a; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 12px; letter-spacing: 1px; }
-.file-row label:hover { background: #2a2a5a; }
-.file-row input[type=file] { display: none; }
-#file-name { font-size: 11px; color: #606080; }
-.meter { width: 100%; max-width: 640px; height: 4px; background: #1a1a3a; border-radius: 2px; margin-bottom: 16px; overflow: hidden; }
-.meter-fill { height: 100%; background: linear-gradient(90deg, #3040a0, #6060c0, #a060c0); width: 0%; transition: width 50ms; }
-.controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; max-width: 640px; width: 100%; margin-bottom: 16px; }
-@media (max-width: 500px) { .controls { grid-template-columns: repeat(2, 1fr); } }
-.knob { background: #12122a; border-radius: 10px; padding: 14px 10px; text-align: center; border: 1px solid #1a1a3a; }
-.knob label { display: block; font-size: 10px; letter-spacing: 1.5px; color: #8080a0; margin-bottom: 2px; text-transform: uppercase; }
-.knob .hint { display: block; font-size: 8px; color: #7070a0; margin-bottom: 6px; letter-spacing: 0.5px; }
-.knob input[type=range] { width: 100%; -webkit-appearance: none; height: 6px; border-radius: 3px; background: #1a1a3a; outline: none; }
-.knob input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #6060c0; cursor: pointer; border: 2px solid #8080e0; }
-.knob .value { font-size: 16px; color: #a0a0d0; margin-top: 4px; font-variant-numeric: tabular-nums; }
-.status { font-size: 11px; color: #8080a0; margin-top: 4px; }
-button:focus-visible, input:focus-visible { outline: 2px solid #8080e0; outline-offset: 2px; }
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,sans-serif;background:#0a0a1a;color:#c0c0d0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:20px}
+h1{font-size:24px;font-weight:300;letter-spacing:4px;margin-bottom:4px;color:#e0e0f0}
+.sub{font-size:12px;color:#7070a0;margin-bottom:20px;letter-spacing:2px}
+.src{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center;justify-content:center}
+button{background:#1a1a3a;color:#a0a0d0;border:1px solid #2a2a5a;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:12px;letter-spacing:1px}
+button:hover{background:#2a2a5a}button.active{background:#3030a0;border-color:#5050c0;color:#fff}
+button:focus-visible,input:focus-visible{outline:2px solid #8080e0;outline-offset:2px}
+.fr{display:flex;gap:8px;margin-bottom:16px;align-items:center;justify-content:center;flex-wrap:wrap}
+.fr label{background:#1a1a3a;color:#a0a0d0;border:1px solid #2a2a5a;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:12px;letter-spacing:1px}
+.fr label:hover{background:#2a2a5a}.fr input[type=file]{display:none}#fn{font-size:11px;color:#7070a0}
+.m{width:100%;max-width:640px;height:4px;background:#1a1a3a;border-radius:2px;margin-bottom:16px;overflow:hidden}
+.mf{height:100%;background:linear-gradient(90deg,#3040a0,#6060c0,#a060c0);width:0%;transition:width 50ms}
+.ctrls{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;max-width:640px;width:100%;margin-bottom:16px}
+@media(max-width:500px){.ctrls{grid-template-columns:repeat(2,1fr)}}
+.k{background:#12122a;border-radius:10px;padding:14px 10px;text-align:center;border:1px solid #1a1a3a}
+.k label{display:block;font-size:10px;letter-spacing:1.5px;color:#8080a0;margin-bottom:2px;text-transform:uppercase}
+.k .h{display:block;font-size:8px;color:#7070a0;margin-bottom:6px;letter-spacing:0.5px}
+.k input[type=range]{width:100%;-webkit-appearance:none;height:6px;border-radius:3px;background:#1a1a3a;outline:none}
+.k input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:#6060c0;cursor:pointer;border:2px solid #8080e0}
+.k .v{font-size:16px;color:#a0a0d0;margin-top:4px;font-variant-numeric:tabular-nums}
+.st{font-size:11px;color:#8080a0;margin-top:4px}
 </style>
 </head>
 <body>
-
 <h1>DIORAMATIC</h1>
-<div class="subtitle">GRANULAR SHIMMER</div>
-
-<div class="source-section">
-  <button id="btn-mic" onclick="startMic()">Mic</button>
-  <button id="btn-tone" onclick="startTone()">Tone</button>
-  <button id="btn-chord" onclick="startChord()">Chord</button>
-  <button id="btn-piano" onclick="startBuiltin('audio/piano.wav','Piano')">Piano</button>
-  <button id="btn-arp" onclick="startBuiltin('audio/arp.wav','Arp')">Arp</button>
-  <button id="btn-stop" onclick="stopAudio()">Stop</button>
+<div class="sub">GRANULAR SHIMMER REVERB</div>
+<div class="src">
+<button id="btn-mic" onclick="startMic()">Mic</button>
+<button id="btn-tone" onclick="startTone()">Tone</button>
+<button id="btn-chord" onclick="startChord()">Chord</button>
+<button id="btn-piano" onclick="startBuiltin('audio/piano.wav','Piano')">Piano</button>
+<button id="btn-arp" onclick="startBuiltin('audio/arp.wav','Arp')">Arp</button>
+<button id="btn-stop" onclick="stopAudio()">Stop</button>
 </div>
-
-<div class="file-row">
-  <label for="file-input">Load Audio File</label>
-  <input type="file" id="file-input" accept="audio/*,.wav,.mp3,.m4a,.aif,.aiff,.ogg,.flac" onchange="loadFile(event)">
-  <span id="file-name"></span>
+<div class="fr">
+<label for="fi">Load Audio File</label>
+<input type="file" id="fi" accept="audio/*,.wav,.mp3,.m4a,.aif,.aiff,.ogg,.flac" onchange="loadFile(event)">
+<span id="fn"></span>
 </div>
-
-<div class="meter"><div class="meter-fill" id="meter"></div></div>
-
-<div class="controls">
-  <div class="knob"><label>Space</label><span class="hint">room &rarr; cathedral</span><input type="range" id="k-space" min="0" max="100" value="55"><div class="value" id="v-space">55</div></div>
-  <div class="knob"><label>Shimmer</label><span class="hint">natural &rarr; crystal</span><input type="range" id="k-shimmer" min="0" max="100" value="35"><div class="value" id="v-shimmer">35</div></div>
-  <div class="knob"><label>Smear</label><span class="hint">sharp &rarr; dissolved</span><input type="range" id="k-smear" min="0" max="100" value="40"><div class="value" id="v-smear">40</div></div>
-  <div class="knob"><label>Warmth</label><span class="hint">airy &rarr; amber</span><input type="range" id="k-warmth" min="0" max="100" value="45"><div class="value" id="v-warmth">45</div></div>
-  <div class="knob"><label>Drift</label><span class="hint">still &rarr; breathing</span><input type="range" id="k-drift" min="0" max="100" value="35"><div class="value" id="v-drift">35</div></div>
-  <div class="knob"><label>Sustain</label><span class="hint">short &rarr; infinite</span><input type="range" id="k-sustain" min="0" max="100" value="50"><div class="value" id="v-sustain">50</div></div>
-  <div class="knob"><label>Scatter</label><span class="hint">few &rarr; many</span><input type="range" id="k-scatter" min="0" max="100" value="40"><div class="value" id="v-scatter">40</div></div>
-  <div class="knob"><label>Mix</label><span class="hint">dry &rarr; wet</span><input type="range" id="k-mix" min="0" max="100" value="60"><div class="value" id="v-mix">60</div></div>
+<div class="m"><div class="mf" id="meter"></div></div>
+<div class="ctrls">
+<div class="k"><label>Space</label><span class="h">room &rarr; cathedral</span><input type="range" id="k-space" min="0" max="100" value="55"><div class="v" id="v-space">55</div></div>
+<div class="k"><label>Shimmer</label><span class="h">natural &rarr; crystal</span><input type="range" id="k-shimmer" min="0" max="100" value="35"><div class="v" id="v-shimmer">35</div></div>
+<div class="k"><label>Smear</label><span class="h">sparkle &rarr; smooth</span><input type="range" id="k-smear" min="0" max="100" value="40"><div class="v" id="v-smear">40</div></div>
+<div class="k"><label>Warmth</label><span class="h">airy &rarr; amber</span><input type="range" id="k-warmth" min="0" max="100" value="45"><div class="v" id="v-warmth">45</div></div>
+<div class="k"><label>Drift</label><span class="h">still &rarr; breathing</span><input type="range" id="k-drift" min="0" max="100" value="35"><div class="v" id="v-drift">35</div></div>
+<div class="k"><label>Sustain</label><span class="h">short &rarr; infinite</span><input type="range" id="k-sustain" min="0" max="100" value="50"><div class="v" id="v-sustain">50</div></div>
+<div class="k"><label>Scatter</label><span class="h">few &rarr; many</span><input type="range" id="k-scatter" min="0" max="100" value="40"><div class="v" id="v-scatter">40</div></div>
+<div class="k"><label>Mix</label><span class="h">dry &rarr; wet</span><input type="range" id="k-mix" min="0" max="100" value="60"><div class="v" id="v-mix">60</div></div>
 </div>
-
-<div class="status" id="status" role="status" aria-live="polite">Click a source to begin</div>
-
+<div class="st" id="status" role="status" aria-live="polite">Click a source to begin</div>
 <script>
-const processorCode = `
-class DioramaticProcessor extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.sr = sampleRate;
-
-    // Musical params (0-1)
-    this.space = 0.55; this.shimmer = 0.35; this.smear = 0.4; this.warmth = 0.45;
-    this.drift = 0.35; this.sustain = 0.5; this.scatter = 0.4; this.mix = 0.6;
-
-    // Capture buffer
-    this.capSize = Math.floor(this.sr * 2);
-    this.capL = new Float32Array(this.capSize);
-    this.capR = new Float32Array(this.capSize);
-    this.capPos = 0;
-
-    // Grains
-    this.maxGrains = 32;
-    this.grains = [];
-    for (let i = 0; i < this.maxGrains; i++) {
-      this.grains.push({active:false,start:0,len:0,pos:0,speed:1,amp:0,
-        envInc:0,envPhase:0,panL:0.5,panR:0.5,detune:1});
-    }
-    this.prevWetL = 0; this.prevWetR = 0;
-    this.burstEnergy = 0; this.burstEnergySlow = 0;
-    this.burstActive = 0; this.burstTimer = 0; this.burstInterval = 128;
-    this.burstOrigin = 0; this.burstCount = 0; this.burstDebounce = 0;
-
-    // FDN Reverb
-    this.fdnSize = 8192;
-    this.fdnLines = [new Float32Array(this.fdnSize),new Float32Array(this.fdnSize),
-                     new Float32Array(this.fdnSize),new Float32Array(this.fdnSize)];
-    this.fdnPos = [0,0,0,0];
-    this.fdnLP = [0,0,0,0];
-    this.fdnMod = [0,0,0,0];
-
-    // Allpass diffusers
-    this.apLens = [241,173,419,313];
-    this.apBufs = this.apLens.map(l => new Float32Array(l));
-    this.apPos = [0,0,0,0];
-
-    // Shimmer pitch shift buffer
-    this.shimBuf = new Float32Array(4096);
-    this.shimWr = 0; this.shimRd = 0;
-
-    // SVF filter
-    this.svfL = {ic1:0,ic2:0}; this.svfR = {ic1:0,ic2:0};
-
-    // Pitch mod LFO
-    this.lfoPhase = 0;
-
-    // Output smoothing — catches pops/clicks
-    this.prevOutL = 0; this.prevOutR = 0;
-    this.dcL = 0; this.dcR = 0;
-
-    // RNG
-    this.rngState = 12345;
-    this.peakLevel = 0; this.meterCounter = 0;
-
-    this.port.onmessage = (e) => {
-      const p = e.data;
-      for (const k of ['space','shimmer','smear','warmth','drift','sustain','scatter','mix']) {
-        if (p[k] !== undefined) this[k] = p[k];
-      }
-    };
-  }
-
-  rng() { this.rngState = (this.rngState * 1664525 + 1013904223) & 0xFFFFFFFF; return (this.rngState >>> 8) / 16777216; }
-  hann(p) { return 0.5 * (1 - Math.cos(2 * Math.PI * p)); }
-
-  triggerGrain(speed, amp, lenMs, panWidth) {
-    for (let g of this.grains) {
-      if (!g.active) {
-        const len = Math.max(44, Math.floor(this.sr * lenMs / 1000));
-        const recent = Math.floor(this.sr * 0.05 + this.rng() * this.sr * 0.4);
-        g.active = true;
-        g.start = (this.capPos - recent + this.capSize) % this.capSize;
-        g.len = len; g.pos = 0; g.speed = speed; g.amp = amp;
-        g.envPhase = 0; g.envInc = 1 / len;
-        g.detune = 1 + (this.rng() - 0.5) * 0.009;
-        // Pan with scatter — use equal power, limited range to avoid pops
-        const panPos = (this.rng() - 0.5) * panWidth * 0.7;
-        g.panL = Math.sqrt(0.5 - panPos * 0.5);
-        g.panR = Math.sqrt(0.5 + panPos * 0.5);
-        // Ensure minimum grain length for short sparkles to avoid clicks
-        if (g.len < 88) { g.len = 88; g.envInc = 1 / 88; }
-        return;
-      }
-    }
-  }
-
-  process(inputs, outputs) {
-    const input = inputs[0]; const output = outputs[0];
-    if (!input || !input[0]) return true;
-    const inL = input[0]; const inR = input[1] || input[0];
-    const outL = output[0]; const outR = output[1] || output[0];
-    const N = outL.length;
-
-    // === DERIVE DSP PARAMS FROM MUSICAL KNOBS ===
-
-    // Space -> reverb delay line selection + send amount
-    // 0=small room, 1=infinite cathedral
-    const revSend = 0.3 + this.space * 0.7;
-    const fdnLengths = [
-      Math.floor(1087 + this.space * 2500),
-      Math.floor(1283 + this.space * 2900),
-      Math.floor(1447 + this.space * 3400),
-      Math.floor(1663 + this.space * 3900)
-    ];
-
-    // Shimmer -> octave-up feedback in reverb + bright grain rate
-    // 0=natural reverb, 1=cascading crystal harmonics
-    // Scatter -> grain density + stereo spread. Even at max, individual events.
-    const density = 0.1 + this.scatter * 0.9;
-    const panWidth = this.scatter;
-
-    const shimFeedback = this.shimmer * 0.12;
-    const shimGrainRate = this.shimmer > 0.1 ? Math.max(4410, Math.floor(44100 / (0.5 + this.shimmer * 2.5 * density))) : 999999;
-
-    const cloudRate = this.smear > 0.05 ? Math.max(4410, Math.floor(44100 / (0.7 + this.smear * 3 * density))) : 999999;
-    const cloudLenMs = 20 + this.smear * 120;
-
-    const cutHz = Math.min(20000, 200 * Math.pow(100, 1 - this.warmth));
-    const pitchModDepth = this.drift * 0.15;
-    const pitchModRate = 0.05 + this.drift * 0.4;
-    const revModDepth = 4 + this.drift * 20;
-    const revFeedback = Math.min(0.999, 1 - 0.3 * Math.pow(1 - this.sustain, 2.5));
-    const sustainGrainLen = 50 + this.sustain * 350;
-
-    // Reverb damping: derived from warmth (warmer = more damping)
-    const damping = 0.15 + this.warmth * 0.5;
-
-    // SVF coefficients
-    const svfG = Math.tan(Math.PI * Math.min(cutHz, 20000) / this.sr);
-    const svfK = 2 - 0.19;
-    const svfA1 = 1 / (1 + svfG * (svfG + svfK));
-    const svfA2 = svfG * svfA1;
-    const svfA3 = svfG * svfA2;
-
-    // LFO
-    const lfoInc = pitchModRate / this.sr;
-
-    // No envelope gating — grains fire continuously. Input level
-    // adds density on loud hits (more grains, not gated grains).
-
-    for (let i = 0; i < N; i++) {
-      const dryL = inL[i] * 0.7;
-      const dryR = inR[i] * 0.7;
-
-      // Capture buffer — with wet feedback for cascading (Eno/Lanois loop)
-      const fbAmt = this.sustain * 0.4;
-      this.capL[this.capPos] = dryL + this.prevWetL * fbAmt;
-      this.capR[this.capPos] = dryR + this.prevWetR * fbAmt;
-      this.capPos = (this.capPos + 1) % this.capSize;
-
-      // Input level for density boost on loud hits
-      const inLevel = Math.abs(dryL) + Math.abs(dryR);
-
-      // Pitch mod LFO
-      const lfoVal = Math.sin(2 * Math.PI * this.lfoPhase);
-      const pitchMod = Math.pow(2, pitchModDepth * lfoVal * (100 / 1200));
-      this.lfoPhase += lfoInc;
-      if (this.lfoPhase >= 1) this.lfoPhase -= 1;
-
-      // === GRAIN TRIGGERS ===
-
-      // === BURST SCATTER SYSTEM ===
-      const inEnergy = dryL * dryL + dryR * dryR;
-      this.burstEnergy += 0.05 * (inEnergy - this.burstEnergy);
-      this.burstEnergySlow += 0.0005 * (inEnergy - this.burstEnergySlow);
-      if (this.burstDebounce > 0) this.burstDebounce--;
-
-      // Detect transient
-      if (this.burstDebounce === 0 &&
-          this.burstEnergy > this.burstEnergySlow * 2 + 0.0005 &&
-          this.burstEnergy > 0.0008) {
-        const numGrains = 8 + Math.floor(this.scatter * 24);
-        this.burstActive = numGrains;
-        this.burstOrigin = (this.capPos - 441 + this.capSize) % this.capSize;
-        this.burstTimer = 0;
-        this.burstInterval = 64;
-        this.burstCount = 0;
-        this.burstDebounce = 2205;
-        const immediate = 2 + Math.floor(this.scatter * 6);
-        for (let g = 0; g < immediate && this.burstActive > 0; g++) {
-          let sp = this.rng() < 0.4 ? 1 : (this.rng() < 0.7 ? 2 : 4);
-          if (this.shimmer > 0.5 && this.rng() < this.shimmer)
-            sp = this.rng() < 0.5 ? 2 : 4;
-          const len = cloudLenMs + this.rng() * 60;
-          const amp = 0.7 + this.sustain * 0.3;
-          const saveCap = this.capPos;
-          this.capPos = (this.burstOrigin + Math.floor(this.rng() * 882)) % this.capSize;
-          this.triggerGrain(sp, amp, len, panWidth);
-          this.capPos = saveCap;
-          this.burstActive--; this.burstCount++;
-        }
-      }
-
-      // Continue burst: grains at increasing intervals
-      if (this.burstActive > 0) {
-        this.burstTimer++;
-        if (this.burstTimer >= this.burstInterval) {
-          this.burstTimer = 0;
-          this.burstInterval = Math.min(88200, Math.floor(this.burstInterval * (1.15 + this.sustain * 0.25)));
-          let sp = this.rng() < 0.3 ? 1 : (this.rng() < 0.6 ? 2 : 4);
-          if (this.shimmer > 0.5 && this.rng() < this.shimmer)
-            sp = this.rng() < 0.5 ? 2 : 4;
-          const decay = 1 / (1 + this.burstCount * 0.06);
-          const amp = (0.7 + this.sustain * 0.3) * decay;
-          const len = cloudLenMs + this.rng() * 60;
-          const saveCap = this.capPos;
-          this.capPos = (this.burstOrigin + Math.floor(this.rng() * 882)) % this.capSize;
-          this.triggerGrain(sp, amp, len, panWidth);
-          this.capPos = saveCap;
-          this.burstActive--; this.burstCount++;
-        }
-      }
-
-      // === GRAIN PLAYBACK ===
-      let wetL = 0, wetR = 0;
-      for (let g of this.grains) {
-        if (!g.active) continue;
-        const idx = Math.floor(g.start + g.pos);
-        const frac = (g.start + g.pos) - idx;
-        const i0 = ((idx % this.capSize) + this.capSize) % this.capSize;
-        const i1 = (i0 + 1) % this.capSize;
-        const sL = this.capL[i0] * (1 - frac) + this.capL[i1] * frac;
-        const sR = this.capR[i0] * (1 - frac) + this.capR[i1] * frac;
-        const env = this.hann(g.envPhase);
-        const a = g.amp * env;
-        wetL += sL * a * g.panL;
-        wetR += sR * a * g.panR;
-        g.pos += g.speed * g.detune * pitchMod;
-        g.envPhase += g.envInc;
-        if (g.envPhase >= 1) g.active = false;
-      }
-
-      // === SVF FILTER ===
-      let v3 = wetL - this.svfL.ic2;
-      let v1 = svfA1 * this.svfL.ic1 + svfA2 * v3;
-      let v2 = this.svfL.ic2 + svfA2 * this.svfL.ic1 + svfA3 * v3;
-      this.svfL.ic1 = 2 * v1 - this.svfL.ic1;
-      this.svfL.ic2 = 2 * v2 - this.svfL.ic2;
-      wetL = v2;
-
-      v3 = wetR - this.svfR.ic2;
-      v1 = svfA1 * this.svfR.ic1 + svfA2 * v3;
-      v2 = this.svfR.ic2 + svfA2 * this.svfR.ic1 + svfA3 * v3;
-      this.svfR.ic1 = 2 * v1 - this.svfR.ic1;
-      this.svfR.ic2 = 2 * v2 - this.svfR.ic2;
-      wetR = v2;
-
-      // === FDN REVERB ===
-      if (revSend > 0.01) {
-        // Input diffusion
-        let diff = (dryL + dryR + wetL + wetR) * 0.5 * revSend;
-        for (let a = 0; a < 4; a++) {
-          const del = this.apBufs[a][this.apPos[a]];
-          const ao = del - 0.5 * diff;
-          this.apBufs[a][this.apPos[a]] = diff + 0.5 * ao;
-          diff = ao;
-          this.apPos[a] = (this.apPos[a] + 1) % this.apLens[a];
-        }
-
-        // Modulated delay line read
-        const modRates = [0.37, 0.47, 0.31, 0.53];
-        let taps = [0, 0, 0, 0];
-        for (let l = 0; l < 4; l++) {
-          const mo = Math.sin(2 * Math.PI * this.fdnMod[l]) * revModDepth;
-          let d = fdnLengths[l] + Math.floor(mo);
-          if (d < 1) d = 1; if (d >= this.fdnSize) d = this.fdnSize - 1;
-          taps[l] = this.fdnLines[l][(this.fdnPos[l] - d + this.fdnSize) & (this.fdnSize - 1)];
-          this.fdnMod[l] += modRates[l] / this.sr;
-          if (this.fdnMod[l] >= 1) this.fdnMod[l] -= 1;
-        }
-
-        // Hadamard
-        const mx = [
-          0.5 * (taps[0] + taps[1] + taps[2] + taps[3]),
-          0.5 * (taps[0] - taps[1] + taps[2] - taps[3]),
-          0.5 * (taps[0] + taps[1] - taps[2] - taps[3]),
-          0.5 * (taps[0] - taps[1] - taps[2] + taps[3])
-        ];
-
-        // Shimmer pitch shift
-        this.shimBuf[this.shimWr] = (mx[0] + mx[1] + mx[2] + mx[3]) * 0.25;
-        this.shimWr = (this.shimWr + 1) & 4095;
-        const gs = 1024;
-        const rdA = Math.floor(this.shimRd); const frA = this.shimRd - rdA;
-        const sA = this.shimBuf[rdA & 4095] * (1 - frA) + this.shimBuf[(rdA + 1) & 4095] * frA;
-        const eA = 0.5 * (1 - Math.cos(2 * Math.PI * ((this.shimRd / gs) % 1)));
-        const rdB = this.shimRd + gs / 2;
-        const rdBi = Math.floor(rdB); const frB = rdB - rdBi;
-        const sB = this.shimBuf[rdBi & 4095] * (1 - frB) + this.shimBuf[(rdBi + 1) & 4095] * frB;
-        const eB = 0.5 * (1 - Math.cos(2 * Math.PI * ((rdB / gs) % 1)));
-        const shimOut = sA * eA + sB * eB;
-        this.shimRd += 2;
-        const sd = this.shimWr - this.shimRd;
-        if (sd < 0 || sd > 4096 - gs) {
-          this.shimRd = this.shimWr - 2048;
-          if (this.shimRd < 0) this.shimRd += 4096;
-        }
-
-        // Feedback with shimmer + damping
-        for (let l = 0; l < 4; l++) {
-          let fb = mx[l] * revFeedback;
-          this.fdnLP[l] += damping * (fb - this.fdnLP[l]);
-          fb = this.fdnLP[l] + shimOut * shimFeedback;
-          if (fb > 0.7 || fb < -0.7) fb = Math.tanh(fb) * 0.98;
-          else fb *= 0.998;
-          this.fdnLines[l][this.fdnPos[l]] = diff + fb;
-          this.fdnPos[l] = (this.fdnPos[l] + 1) & (this.fdnSize - 1);
-        }
-
-        wetL += (taps[0] + taps[2]) * 0.65 * revSend;
-        wetR += (taps[1] + taps[3]) * 0.65 * revSend;
-      }
-
-      // Mix + soft clip
-      this.prevWetL = wetL; this.prevWetR = wetR;
-      let oL = dryL * (1 - this.mix) + wetL * this.mix;
-      let oR = dryR * (1 - this.mix) + wetR * this.mix;
-      oL = Math.tanh(oL * 1.5) * 0.667;
-      oR = Math.tanh(oR * 1.5) * 0.667;
-
-      // DC blocker (removes offset that causes clicks)
-      const dcCoeff = 0.997;
-      const dcOutL = oL - this.dcL + dcCoeff * this.prevOutL;
-      const dcOutR = oR - this.dcR + dcCoeff * this.prevOutR;
-      this.dcL = oL; this.dcR = oR;
-      this.prevOutL = dcOutL; this.prevOutR = dcOutR;
-      oL = dcOutL; oR = dcOutR;
-
-      // Slew limiter — caps sample-to-sample jump to prevent clicks
-      const maxSlew = 0.05;
-      const dL = oL - (outL[i > 0 ? i - 1 : 0] || 0);
-      if (dL > maxSlew) oL = (outL[i > 0 ? i - 1 : 0] || 0) + maxSlew;
-      else if (dL < -maxSlew) oL = (outL[i > 0 ? i - 1 : 0] || 0) - maxSlew;
-      const dR = oR - (outR[i > 0 ? i - 1 : 0] || 0);
-      if (dR > maxSlew) oR = (outR[i > 0 ? i - 1 : 0] || 0) + maxSlew;
-      else if (dR < -maxSlew) oR = (outR[i > 0 ? i - 1 : 0] || 0) - maxSlew;
-
-      outL[i] = oL; outR[i] = oR;
-
-      const lvl = Math.abs(oL) > Math.abs(oR) ? Math.abs(oL) : Math.abs(oR);
-      if (lvl > this.peakLevel) this.peakLevel = lvl;
-    }
-
-    this.meterCounter += N;
-    if (this.meterCounter >= 2048) {
-      this.meterCounter = 0;
-      this.port.postMessage({ peak: this.peakLevel });
-      this.peakLevel = 0;
-    }
-    return true;
-  }
+const P=`
+class D extends AudioWorkletProcessor{
+constructor(){super();const S=sampleRate;this.S=S;
+this.space=.55;this.shimmer=.35;this.smear=.4;this.warmth=.45;
+this.drift=.35;this.sustain=.5;this.scatter=.4;this.mix=.6;
+const N=8192;this.N=N;this.NM=N-1;
+this.L=[];this.LP=[];this.LLP=[];this.LM=[];
+for(let i=0;i<4;i++){this.L.push(new Float32Array(N));this.LP.push(0);this.LLP.push(0);this.LM.push(0)}
+const AM=512;this.AL=[241,173,419,313];this.AB=this.AL.map(l=>new Float32Array(l));this.AP=[0,0,0,0];
+this.FAL=[347,461];this.FAB=[new Float32Array(512),new Float32Array(512)];this.FAP=[0,0];this.FAM=[0,0];
+const SB=8192;this.SB=SB;this.SBM=SB-1;
+this.SBL=new Float32Array(SB);this.SBR=new Float32Array(SB);this.SW=0;
+this.SG=[];for(let i=0;i<16;i++)this.SG.push({a:0,rp:0,sp:2,ep:0,ei:0,am:.5,pl:.5,pr:.5,dt:1});
+this.ST=0;
+this.STB=new Float32Array(1024);this.STP=0;
+this.SPL=0;this.SPR=0;
+this.SVFL={i1:0,i2:0};this.SVFR={i1:0,i2:0};
+this.DIL=0;this.DIR=0;this.DOL=0;this.DOR=0;
+this.rng=12345;this.pk=0;this.mc=0;
+this.port.onmessage=e=>{const p=e.data;
+for(const k of['space','shimmer','smear','warmth','drift','sustain','scatter','mix'])
+if(p[k]!==undefined)this[k]=p[k]};
 }
-registerProcessor('dioramatic-processor', DioramaticProcessor);
+R(){this.rng=(this.rng*1664525+1013904223)&0xFFFFFFFF;return(this.rng>>>8)/16777216}
+TG(ms){for(let g of this.SG){if(g.a)continue;
+let len=Math.max(128,Math.floor(this.S*ms/1000));
+if(len>this.SB/2)len=this.SB/2;
+let off=Math.floor(this.R()*(this.SB/2));
+g.rp=(this.SW-len-off+this.SB)&this.SBM;
+g.sp=2;g.dt=1+(this.R()-.5)*.012;g.ep=0;g.ei=1/len;
+g.am=.5+this.R()*.3;
+let pan=(this.R()-.5)*this.scatter*.7;
+g.pl=Math.sqrt(.5-pan*.5);g.pr=Math.sqrt(.5+pan*.5);
+g.a=1;return}}
+process(ins,outs){
+const I=ins[0],O=outs[0];if(!I||!I[0])return true;
+const iL=I[0],iR=I[1]||I[0],oL=O[0],oR=O[1]||O[0],F=oL.length;
+const S=this.S,N=this.N,NM=this.NM,SB=this.SB,SBM=this.SBM;
+const lens=[1087+Math.floor(this.space*3000),1283+Math.floor(this.space*3500),
+1447+Math.floor(this.space*3800),1663+Math.floor(this.space*4200)];
+for(let i=0;i<4;i++)if(lens[i]>=N)lens[i]=N-1;
+let fb=Math.min(.998,1-.35*Math.pow(1-this.sustain,2));
+const sLv=this.shimmer*.5;
+const gMs=5+this.smear*95;
+let sTI=Math.max(128,Math.floor(4410/(1+this.scatter*8)));
+const dmp=(0.1+this.warmth*.6)*(1-this.sustain*.5);
+const mD=4+this.drift*24;const mR=[.37,.47,.31,.53];
+const cut=Math.min(20000,200*Math.pow(100,1-this.warmth));
+const sg=Math.tan(Math.PI*cut/S),sk=2-.19;
+const a1=1/(1+sg*(sg+sk)),a2=sg*a1,a3=sg*a2;
+const rS=.3+this.space*.7;
+for(let i=0;i<F;i++){
+const dL=iL[i]*.7,dR=iR[i]*.7;
+let df=(dL+dR)*.5*rS;
+for(let a=0;a<4;a++){let d=this.AB[a][this.AP[a]];let o=d-.5*df;
+this.AB[a][this.AP[a]]=df+.5*o;df=o;this.AP[a]=(this.AP[a]+1)%this.AL[a]}
+let tp=[0,0,0,0];
+for(let l=0;l<4;l++){
+let m=Math.sin(2*Math.PI*this.LM[l])*mD;
+let fd=lens[l]+m;if(fd<1)fd=1;if(fd>=N-1)fd=N-2;
+let ri=Math.floor(fd),rf=fd-ri;
+let p0=(this.LP[l]-ri+N)&NM,p1=(p0-1+N)&NM;
+tp[l]=this.L[l][p0]*(1-rf)+this.L[l][p1]*rf;
+this.LM[l]+=mR[l]/S;if(this.LM[l]>=1)this.LM[l]-=1}
+let mx=[.5*(tp[0]+tp[1]+tp[2]+tp[3]),.5*(tp[0]-tp[1]+tp[2]-tp[3]),
+.5*(tp[0]+tp[1]-tp[2]-tp[3]),.5*(tp[0]-tp[1]-tp[2]+tp[3])];
+this.SBL[this.SW]=(tp[0]+tp[2])*.5;
+this.SBR[this.SW]=(tp[1]+tp[3])*.5;
+this.SW=(this.SW+1)&SBM;
+this.ST++;if(this.ST>=sTI){this.ST=0;this.TG(gMs)}
+let sL=0,sR=0;
+for(let g of this.SG){if(!g.a)continue;
+let ri=Math.floor(g.rp),rf=g.rp-ri;
+let i0=ri&SBM,i1=(ri+1)&SBM;
+let sl=this.SBL[i0]*(1-rf)+this.SBL[i1]*rf;
+let sr=this.SBR[i0]*(1-rf)+this.SBR[i1]*rf;
+let env=.5*(1-Math.cos(2*Math.PI*g.ep));
+let am=g.am*env;sL+=sl*am*g.pl;sR+=sr*am*g.pr;
+g.rp+=g.sp*g.dt;while(g.rp>=SB)g.rp-=SB;while(g.rp<0)g.rp+=SB;
+g.ep+=g.ei;if(g.ep>=1)g.a=0}
+let fbd=(mx[0]+mx[1]+mx[2]+mx[3])*.25;
+for(let a=0;a<2;a++){let m=Math.sin(2*Math.PI*this.FAM[a])*3;
+let rd=(this.FAP[a]-this.FAL[a]-Math.floor(m)+512)&511;
+let d=this.FAB[a][rd];let o=d-.45*fbd;
+this.FAB[a][this.FAP[a]]=fbd+.45*o;fbd=o;
+this.FAP[a]=(this.FAP[a]+1)&511;
+this.FAM[a]+=((a===0)?.23:.29)/S;if(this.FAM[a]>=1)this.FAM[a]-=1}
+for(let l=0;l<4;l++){let f=mx[l]*fb;
+this.LLP[l]+=dmp*(f-this.LLP[l]);f=this.LLP[l];
+f+=((l<2)?sL:sR)*sLv;f+=fbd*.2;
+if(f>.7||f<-.7)f=Math.tanh(f)*.98;
+this.L[l][this.LP[l]]=df+f;this.LP[l]=(this.LP[l]+1)&NM}
+let rL=(tp[0]+tp[2])*.6,rR=(tp[1]+tp[3])*.6;
+this.STB[this.STP]=rR;let srd=(this.STP-353+1024)&1023;
+rR=this.STB[srd];this.STP=(this.STP+1)&1023;
+let hL=rL-this.SPL;this.SPL+=.15*hL;rL+=hL*.15;
+let hR=rR-this.SPR;this.SPR+=.15*hR;rR+=hR*.15;
+{let v3=rL-this.SVFL.i2,v1=a1*this.SVFL.i1+a2*v3;
+let v2=this.SVFL.i2+a2*this.SVFL.i1+a3*v3;
+this.SVFL.i1=2*v1-this.SVFL.i1;this.SVFL.i2=2*v2-this.SVFL.i2;rL=v2}
+{let v3=rR-this.SVFR.i2,v1=a1*this.SVFR.i1+a2*v3;
+let v2=this.SVFR.i2+a2*this.SVFR.i1+a3*v3;
+this.SVFR.i1=2*v1-this.SVFR.i1;this.SVFR.i2=2*v2-this.SVFR.i2;rR=v2}
+let xL=dL*(1-this.mix)+rL*this.mix;
+let xR=dR*(1-this.mix)+rR*this.mix;
+let cL=xL-this.DIL+.9975*this.DOL;let cR=xR-this.DIR+.9975*this.DOR;
+this.DIL=xL;this.DIR=xR;this.DOL=cL;this.DOR=cR;
+oL[i]=Math.tanh(cL*1.5)*.667;oR[i]=Math.tanh(cR*1.5)*.667;
+let lv=Math.abs(oL[i])>Math.abs(oR[i])?Math.abs(oL[i]):Math.abs(oR[i]);
+if(lv>this.pk)this.pk=lv}
+this.mc+=F;if(this.mc>=2048){this.mc=0;this.port.postMessage({peak:this.pk});this.pk=0}
+return true}
+}
+registerProcessor('d',D);
 `;
-
-let ctx, workletNode, sourceNode;
-
-async function initAudio() {
-  if (ctx) { await ctx.resume(); return; }
-  ctx = new AudioContext({ sampleRate: 44100 });
-  const blob = new Blob([processorCode], { type: 'application/javascript' });
-  await ctx.audioWorklet.addModule(URL.createObjectURL(blob));
-  workletNode = new AudioWorkletNode(ctx, 'dioramatic-processor');
-  workletNode.connect(ctx.destination);
-  workletNode.port.onmessage = (e) => {
-    document.getElementById('meter').style.width = Math.min(100, e.data.peak * 150) + '%';
-  };
-  document.querySelectorAll('.knob input').forEach(el => {
-    el.addEventListener('input', () => {
-      const id = el.id.replace('k-', '');
-      document.getElementById('v-' + id).textContent = el.value;
-      const msg = {}; msg[id] = el.value / 100;
-      workletNode.port.postMessage(msg);
-    });
-    el.dispatchEvent(new Event('input'));
-  });
-}
-
-function disconnectSource() {
-  if (sourceNode) { try{sourceNode.stop();}catch(e){} try{sourceNode.disconnect();}catch(e){} sourceNode=null; }
-}
-function setActive(id) {
-  document.querySelectorAll('.source-section button').forEach(b => b.classList.remove('active'));
-  if (id) document.getElementById(id).classList.add('active');
-}
-async function playBuffer(buf, label, btnId) {
-  await initAudio(); disconnectSource();
-  sourceNode = ctx.createBufferSource(); sourceNode.buffer = buf; sourceNode.loop = true;
-  sourceNode.connect(workletNode); sourceNode.start();
-  setActive(btnId); document.getElementById('status').textContent = label + ' (looping)';
-}
-async function startBuiltin(url, label) {
-  await initAudio();
-  document.getElementById('status').textContent = 'Loading ' + label + '...';
-  try {
-    const resp = await fetch(url); const ab = await resp.arrayBuffer();
-    const audioBuf = await ctx.decodeAudioData(ab);
-    await playBuffer(audioBuf, label, 'btn-' + label.toLowerCase());
-  } catch(e) { document.getElementById('status').textContent = 'Failed: ' + e.message; }
-}
-async function loadFile(event) {
-  const file = event.target.files[0]; if (!file) return;
-  try {
-    await initAudio();
-    document.getElementById('file-name').textContent = file.name;
-    document.getElementById('status').textContent = 'Decoding ' + file.name + '...';
-    const ab = await file.arrayBuffer();
-    const audioBuf = await ctx.decodeAudioData(ab);
-    await playBuffer(audioBuf, file.name, null);
-  } catch(e) {
-    document.getElementById('status').textContent = 'Error: ' + e.message;
-    console.error('File load error:', e);
-  }
-}
-async function startMic() {
-  await initAudio(); disconnectSource();
-  const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-  sourceNode = ctx.createMediaStreamSource(stream);
-  sourceNode.connect(workletNode);
-  sourceNode.stop = () => stream.getTracks().forEach(t=>t.stop());
-  setActive('btn-mic'); document.getElementById('status').textContent = 'Mic active';
-}
-async function startTone() {
-  await initAudio(); disconnectSource();
-  const o=ctx.createOscillator();o.type='sawtooth';o.frequency.value=220;
-  const g=ctx.createGain();g.gain.value=0.15;o.connect(g);g.connect(workletNode);o.start();
-  sourceNode=o; setActive('btn-tone'); document.getElementById('status').textContent='Sawtooth 220Hz';
-}
-async function startChord() {
-  await initAudio(); disconnectSource();
-  const g=ctx.createGain();g.gain.value=0.08;
-  const notes=[261.6,329.6,392,523.3];
-  const oscs=notes.map(f=>{const o=ctx.createOscillator();o.type='sine';o.frequency.value=f;o.connect(g);o.start();return o;});
-  g.connect(workletNode);
-  sourceNode={stop:()=>oscs.forEach(o=>{o.stop();o.disconnect()}),disconnect:()=>g.disconnect()};
-  setActive('btn-chord'); document.getElementById('status').textContent='C major chord';
-}
-function stopAudio() {
-  disconnectSource(); setActive(null);
-  document.getElementById('status').textContent='Stopped';
-  document.getElementById('meter').style.width='0%';
-}
+let ctx,wn,sn;
+async function init(){if(ctx){await ctx.resume();return}
+ctx=new AudioContext({sampleRate:44100});
+const b=new Blob([P],{type:'application/javascript'});
+await ctx.audioWorklet.addModule(URL.createObjectURL(b));
+wn=new AudioWorkletNode(ctx,'d');wn.connect(ctx.destination);
+wn.port.onmessage=e=>{document.getElementById('meter').style.width=Math.min(100,e.data.peak*150)+'%'};
+document.querySelectorAll('.k input').forEach(el=>{
+el.addEventListener('input',()=>{const id=el.id.replace('k-','');
+document.getElementById('v-'+id).textContent=el.value;
+const m={};m[id]=el.value/100;wn.port.postMessage(m)});
+el.dispatchEvent(new Event('input'))})}
+function disc(){if(sn){try{sn.stop()}catch(e){}try{sn.disconnect()}catch(e){}sn=null}}
+function setA(id){document.querySelectorAll('.src button').forEach(b=>b.classList.remove('active'));if(id)document.getElementById(id).classList.add('active')}
+async function playBuf(buf,label,id){await init();disc();sn=ctx.createBufferSource();sn.buffer=buf;sn.loop=true;sn.connect(wn);sn.start();setA(id);document.getElementById('status').textContent=label+' (looping)'}
+async function startBuiltin(url,label){await init();document.getElementById('status').textContent='Loading '+label+'...';
+try{const r=await fetch(url);const ab=await r.arrayBuffer();const buf=await ctx.decodeAudioData(ab);await playBuf(buf,label,'btn-'+label.toLowerCase())}catch(e){document.getElementById('status').textContent='Failed: '+e.message}}
+async function loadFile(event){const f=event.target.files[0];if(!f)return;
+try{await init();document.getElementById('fn').textContent=f.name;document.getElementById('status').textContent='Decoding...';
+const ab=await f.arrayBuffer();const buf=await ctx.decodeAudioData(ab);await playBuf(buf,f.name,null)}catch(e){document.getElementById('status').textContent='Error: '+e.message}}
+async function startMic(){await init();disc();const s=await navigator.mediaDevices.getUserMedia({audio:true});
+sn=ctx.createMediaStreamSource(s);sn.connect(wn);sn.stop=()=>s.getTracks().forEach(t=>t.stop());setA('btn-mic');document.getElementById('status').textContent='Mic active'}
+async function startTone(){await init();disc();const o=ctx.createOscillator();o.type='sawtooth';o.frequency.value=220;
+const g=ctx.createGain();g.gain.value=.15;o.connect(g);g.connect(wn);o.start();sn=o;setA('btn-tone');document.getElementById('status').textContent='Sawtooth 220Hz'}
+async function startChord(){await init();disc();const g=ctx.createGain();g.gain.value=.08;
+const ns=[261.6,329.6,392,523.3];const os=ns.map(f=>{const o=ctx.createOscillator();o.type='sine';o.frequency.value=f;o.connect(g);o.start();return o});
+g.connect(wn);sn={stop:()=>os.forEach(o=>{o.stop();o.disconnect()}),disconnect:()=>g.disconnect()};
+setA('btn-chord');document.getElementById('status').textContent='C major chord'}
+function stopAudio(){disc();setA(null);document.getElementById('status').textContent='Stopped';document.getElementById('meter').style.width='0%'}
 </script>
 </body>
 </html>
