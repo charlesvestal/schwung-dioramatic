@@ -566,8 +566,9 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         if (rev->shimmer_read_phase_a < 0) rev->shimmer_read_phase_a += (float)SHIMMER_BUF_SIZE;
     }
 
-    /* Shimmer amount increases with reverb mode: subtle on Bright, heavy on Ambient */
-    static const float shimmer_amounts[4] = {0.08f, 0.12f, 0.18f, 0.30f};
+    /* Shimmer: low levels prevent runaway — even small amounts cascade
+       into rich harmonics because the reverb feedback is already high */
+    static const float shimmer_amounts[4] = {0.03f, 0.04f, 0.06f, 0.08f};
     float shimmer_level = shimmer_amounts[mode];
 
     /* Apply feedback, damping, shimmer injection, and write back */
@@ -576,9 +577,11 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         /* One-pole lowpass damping */
         rev->lp_state[i] += p->damping * (fb - rev->lp_state[i]);
         fb = rev->lp_state[i];
-        /* Inject shimmer (octave-up) into the feedback path — this is what
-           creates the cascading harmonics building up over the reverb tail */
+        /* Inject shimmer — cascading crystalline harmonics */
         fb += shimmer_out * shimmer_level;
+        /* Safety limiter prevents runaway buildup */
+        if (fb > 0.9f) fb = 0.9f;
+        else if (fb < -0.9f) fb = -0.9f;
         /* Write with input */
         rev->lines[i][rev->write_pos[i]] = diff_in + fb;
         rev->write_pos[i] = (rev->write_pos[i] + 1) & (FDN_MAX_DELAY - 1);
