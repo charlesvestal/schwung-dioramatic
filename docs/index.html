@@ -91,6 +91,7 @@ class DioramaticProcessor extends AudioWorkletProcessor {
       this.grains.push({active:false,start:0,len:0,pos:0,speed:1,amp:0,
         envInc:0,envPhase:0,panL:0.5,panR:0.5,detune:1});
     }
+    this.prevWetL = 0; this.prevWetR = 0;
     this.burstEnergy = 0; this.burstEnergySlow = 0;
     this.burstActive = 0; this.burstTimer = 0; this.burstInterval = 128;
     this.burstOrigin = 0; this.burstCount = 0; this.burstDebounce = 0;
@@ -216,9 +217,10 @@ class DioramaticProcessor extends AudioWorkletProcessor {
       const dryL = inL[i] * 0.7;
       const dryR = inR[i] * 0.7;
 
-      // Capture buffer
-      this.capL[this.capPos] = dryL;
-      this.capR[this.capPos] = dryR;
+      // Capture buffer — with wet feedback for cascading (Eno/Lanois loop)
+      const fbAmt = this.sustain * 0.4;
+      this.capL[this.capPos] = dryL + this.prevWetL * fbAmt;
+      this.capR[this.capPos] = dryR + this.prevWetR * fbAmt;
       this.capPos = (this.capPos + 1) % this.capSize;
 
       // Input level for density boost on loud hits
@@ -385,6 +387,7 @@ class DioramaticProcessor extends AudioWorkletProcessor {
       }
 
       // Mix + soft clip
+      this.prevWetL = wetL; this.prevWetR = wetR;
       let oL = dryL * (1 - this.mix) + wetL * this.mix;
       let oR = dryR * (1 - this.mix) + wetR * this.mix;
       oL = Math.tanh(oL * 1.5) * 0.667;

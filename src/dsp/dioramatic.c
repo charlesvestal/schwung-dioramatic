@@ -121,6 +121,9 @@ typedef struct {
     /* FDN reverb */
     fdn_reverb_t reverb;
 
+    /* Wet feedback for capture buffer (the Eno/Lanois loop) */
+    float prev_wet_l, prev_wet_r;
+
     /* DC blocker */
     float dc_prev_in_l, dc_prev_in_r, dc_prev_out_l, dc_prev_out_r;
 
@@ -438,9 +441,14 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         float dry_l = (float)audio_inout[i * 2] / 32768.0f;
         float dry_r = (float)audio_inout[i * 2 + 1] / 32768.0f;
 
-        /* Capture buffer */
-        inst->capture.buffer[inst->capture.write_pos].l = dry_l;
-        inst->capture.buffer[inst->capture.write_pos].r = dry_r;
+        /* Capture buffer — writes a mix of dry input and previous wet output.
+           The wet feedback creates a loop: grains read from reverbed material,
+           which feeds back into the reverb, cascading upward with each pass.
+           This is the Eno/Lanois architecture — the effect feeds itself.
+           Sustain controls the feedback amount (how much wet feeds back). */
+        float fb_amount = inst->sustain * 0.4f;  /* 0 to 0.4 — cascades beautifully without saturating */
+        inst->capture.buffer[inst->capture.write_pos].l = dry_l + inst->prev_wet_l * fb_amount;
+        inst->capture.buffer[inst->capture.write_pos].r = dry_r + inst->prev_wet_r * fb_amount;
         inst->capture.write_pos = (inst->capture.write_pos + 1) % CAPTURE_SAMPLES;
 
         /* Pitch mod LFO */
@@ -555,13 +563,6 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
             float samp_r = inst->capture.buffer[idx0].r * (1.0f - frac)
                          + inst->capture.buffer[idx1].r * frac;
 
-            /* Per-grain darkening filter: one-pole LP that closes as grain ages.
-               Coefficient sweeps from ~1.0 (open) toward lp_target (dark) over lifetime.
-               Like a piano string losing brightness as it decays. */
-            float lp_coeff = 1.0f - gr->env_phase * (1.0f - gr->lp_target);
-            gr->lp_state += lp_coeff * (((samp_l + samp_r) * 0.5f) - gr->lp_state);
-            samp_l = samp_l * lp_coeff + gr->lp_state * (1.0f - lp_coeff);
-            samp_r = samp_r * lp_coeff + gr->lp_state * (1.0f - lp_coeff);
 
             int env_idx = (int)(gr->env_phase * (float)(ENV_TABLE_SIZE - 1));
             if (env_idx > ENV_TABLE_SIZE - 1) env_idx = ENV_TABLE_SIZE - 1;
@@ -594,6 +595,10 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
             wet_l += rev_l;
             wet_r += rev_r;
         }
+
+        /* Store wet for feedback into capture buffer next sample */
+        inst->prev_wet_l = wet_l;
+        inst->prev_wet_r = wet_r;
 
         /* Mix */
         float out_l = dry_l * (1.0f - inst->mix) + wet_l * inst->mix;
