@@ -1455,107 +1455,103 @@ static void ethereal_tick(dioramatic_instance_t *inst) {
     }
 
     /* --- Layer 1: Micro-grain cloud (the "wash") ---
-       Short reverse grains that smear time. At low activity these are very
-       sparse — you hear individual grains dissolving in reverb. At high
-       activity they merge into a continuous wash.
-       activity=0: one grain every ~1.5 sec. activity=1: every ~15ms. */
-    int cloud_interval;
-    if (activity < 0.1f) {
-        /* Ultra-sparse: 44100-66150 samples (1.0-1.5 sec between grains) */
-        cloud_interval = (int)(44100.0f + (0.1f - activity) * 220500.0f);
-    } else {
-        cloud_interval = (int)(4410.0f / (activity * 6.0f));
-    }
-    cloud_interval = (int)((float)cloud_interval / cloud_density);
-    if (cloud_interval < 64) cloud_interval = 64;
+       Short reverse grains that smear time into a continuous texture.
+       ONLY active above activity ~0.2 — below that, just sparkles + reverb.
+       This prevents the "ripple/trill" sound at sparse settings. */
+    if (activity > 0.15f) {
+        float cloud_activity = (activity - 0.15f) / 0.85f;  /* 0-1 rescaled */
+        int cloud_interval = (int)(4410.0f / (0.5f + cloud_activity * 5.5f));
+        cloud_interval = (int)((float)cloud_interval / cloud_density);
+        if (cloud_interval < 64) cloud_interval = 64;
 
-    inst->ethereal_cloud_counter++;
-    if (inst->ethereal_cloud_counter >= cloud_interval) {
-        inst->ethereal_cloud_counter = 0;
-        grain_t *g = find_free_grain(inst);
-        if (g) {
-            /* Grain length: 10-40ms — short enough to never outrun the capture buffer */
-            int grain_len = 441 + (int)(rng_float(&inst->rng_state) * 1323.0f);
-            /* Start position: very recent audio (last 200ms) so grains always
-               have fresh content — prevents the fade-out problem */
-            int recent = (int)(8820.0f + rng_float(&inst->rng_state) * 8820.0f);  /* 200-400ms ago */
-            int start = (wp - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-            /* Speed: mostly 1.0, some octave up for shimmer */
-            float speed = (rng_float(&inst->rng_state) < 0.8f) ? 1.0f : 2.0f;
-            init_grain_common(g, inst, start, grain_len, speed);
-            g->direction = -1;  /* reverse for subtle time-smearing */
-            g->amplitude = 0.25f + repeats * 0.35f;
+        inst->ethereal_cloud_counter++;
+        if (inst->ethereal_cloud_counter >= cloud_interval) {
+            inst->ethereal_cloud_counter = 0;
+            grain_t *g = find_free_grain(inst);
+            if (g) {
+                int grain_len = 441 + (int)(rng_float(&inst->rng_state) * 1323.0f);
+                int recent = (int)(8820.0f + rng_float(&inst->rng_state) * 8820.0f);
+                int start = (wp - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                float speed = (rng_float(&inst->rng_state) < 0.8f) ? 1.0f : 2.0f;
+                init_grain_common(g, inst, start, grain_len, speed);
+                g->direction = -1;
+                g->amplitude = (0.2f + repeats * 0.3f) * cloud_activity;
+            }
         }
     }
 
     /* --- Layer 2: Overtone drone (the "angels") ---
        Longer grains at harmonic intervals create sustained organ-like tones.
-       At low activity, drones are infrequent — mostly reverb with rare events.
-       At high activity, drones overlap continuously. */
-    int drone_interval = sub + (int)((1.0f - activity) * (float)sub * 3.0f);
-    if (drone_interval < 441) drone_interval = 441;
+       Only active above activity ~0.3 — below that, just sparkles + reverb. */
+    if (activity > 0.25f) {
+        float drone_activity = (activity - 0.25f) / 0.75f;
+        int drone_interval = sub + (int)((1.0f - drone_activity) * (float)sub * 3.0f);
+        if (drone_interval < 441) drone_interval = 441;
 
-    inst->ethereal_drone_counter++;
-    if (inst->ethereal_drone_counter >= drone_interval) {
-        inst->ethereal_drone_counter = 0;
-        /* Read from very recent audio — keeps drones fresh and sustaining */
-        int start = (wp - (int)(rng_float(&inst->rng_state) * 4410.0f) - 441 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+        inst->ethereal_drone_counter++;
+        if (inst->ethereal_drone_counter >= drone_interval) {
+            inst->ethereal_drone_counter = 0;
+            int start = (wp - (int)(rng_float(&inst->rng_state) * 4410.0f) - 441 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
 
-        /* Fundamental grain: speed 1.0, moderate length (never exceed 1 second) */
-        grain_t *g1 = find_free_grain(inst);
-        if (g1) {
-            int len1 = sub;
-            if (len1 > 44100) len1 = 44100;
-            if (len1 < 441) len1 = 441;
-            init_grain_common(g1, inst, start, len1, 1.0f);
-            g1->direction = 1;
-            g1->amplitude = (0.3f + repeats * 0.4f) * drone_amp;
-        }
+            grain_t *g1 = find_free_grain(inst);
+            if (g1) {
+                int len1 = sub;
+                if (len1 > 44100) len1 = 44100;
+                if (len1 < 441) len1 = 441;
+                init_grain_common(g1, inst, start, len1, 1.0f);
+                g1->direction = 1;
+                g1->amplitude = (0.3f + repeats * 0.4f) * drone_amp * drone_activity;
+            }
 
-        /* Octave up grain — the angelic shimmer */
-        grain_t *g2 = find_free_grain(inst);
-        if (g2) {
-            int len2 = sub / 2;
-            if (len2 > 22050) len2 = 22050;
-            if (len2 < 441) len2 = 441;
-            init_grain_common(g2, inst, start, len2, 2.0f);
-            g2->direction = 1;
-            g2->amplitude = (0.15f + repeats * 0.2f) * drone_amp;
-        }
+            grain_t *g2 = find_free_grain(inst);
+            if (g2) {
+                int len2 = sub / 2;
+                if (len2 > 22050) len2 = 22050;
+                if (len2 < 441) len2 = 441;
+                init_grain_common(g2, inst, start, len2, 2.0f);
+                g2->direction = 1;
+                g2->amplitude = (0.15f + repeats * 0.2f) * drone_amp * drone_activity;
+            }
 
-        /* Octave down — deeper body, only at higher activity */
-        if (activity > 0.4f) {
-            grain_t *g3 = find_free_grain(inst);
-            if (g3) {
-                int len3 = sub;
-                if (len3 > 44100) len3 = 44100;
-                if (len3 < 441) len3 = 441;
-                init_grain_common(g3, inst, start, len3, 0.5f);
-                g3->direction = 1;
-                g3->amplitude = (0.1f + repeats * 0.15f) * drone_amp;
+            if (drone_activity > 0.3f) {
+                grain_t *g3 = find_free_grain(inst);
+                if (g3) {
+                    int len3 = sub;
+                    if (len3 > 44100) len3 = 44100;
+                    if (len3 < 441) len3 = 441;
+                    init_grain_common(g3, inst, start, len3, 0.5f);
+                    g3->direction = 1;
+                    g3->amplitude = (0.1f + repeats * 0.15f) * drone_amp * drone_activity;
+                }
             }
         }
     }
 
-    /* --- Layer 3: Crystal sparkles (the "dynamism") ---
-       Rare, brief, bright events scattered across the stereo field.
-       At low activity: extremely sparse — once every few seconds, precious.
-       At high activity: a gentle rain of tiny crystals.
-       Check every ~200ms with probability gate — not beat-locked. */
+    /* --- Layer 3: Crystal sparkles ---
+       Single, brief, BRIGHT events — like a bell struck in a cathedral.
+       Two octaves up (speed 4.0), very short (2-5ms), clear attack.
+       At low activity: the ONLY thing you hear besides reverb tail.
+       The reverb's shimmer feedback carries the sparkle into a long,
+       evolving crystalline tail. One sparkle can ring for seconds. */
     inst->ethereal_sparkle_counter++;
-    int sparkle_check_interval = 8820;  /* check every ~200ms */
-    if (inst->ethereal_sparkle_counter >= sparkle_check_interval) {
+    /* Check interval: 200ms at low activity, 80ms at high */
+    int sparkle_check = (int)(8820.0f - activity * 5292.0f);
+    if (sparkle_check < 3528) sparkle_check = 3528;
+    if (inst->ethereal_sparkle_counter >= sparkle_check) {
         inst->ethereal_sparkle_counter = 0;
-        /* Probability per check: ~4% at activity=0 (≈one per 5 seconds),
-           up to ~50% at activity=1 (≈one per 400ms) */
-        float prob = (0.04f + activity * 0.46f) * sparkle_prob;
+        /* Probability: 5% at activity=0 (≈one per 4 seconds),
+           up to 60% at activity=1 (≈one per 130ms) */
+        float prob = (0.05f + activity * 0.55f) * sparkle_prob;
         if (rng_float(&inst->rng_state) < prob) {
             grain_t *g = find_free_grain(inst);
             if (g) {
-                int grain_len = 220 + (int)(rng_float(&inst->rng_state) * 440.0f);
-                int start = (wp - (int)(rng_float(&inst->rng_state) * 4410.0f) - 220 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-                init_grain_common(g, inst, start, grain_len, 2.0f);
-                g->amplitude = 0.4f + activity * 0.3f;
+                /* Very short: 2-5ms. This creates a sharp "ting" not a ripple. */
+                int grain_len = 88 + (int)(rng_float(&inst->rng_state) * 132.0f);
+                /* Read from a recent transient/peak for maximum brightness */
+                int start = (wp - (int)(rng_float(&inst->rng_state) * 2205.0f) - 88 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                /* Two octaves up — bell-like, crystalline */
+                init_grain_common(g, inst, start, grain_len, 4.0f);
+                g->amplitude = 0.5f + activity * 0.3f;
                 g->pan = (rng_float(&inst->rng_state) - 0.5f) * 0.8f;
             }
         }
