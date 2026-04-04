@@ -220,9 +220,9 @@ class DioramaticProcessor extends AudioWorkletProcessor {
     // LFO
     const lfoInc = pitchModRate / this.sr;
 
-    // Envelope follower — release rate matched to reverb tail
-    const tailFactor = (this.sustain + this.space) * 0.5;
-    const slowRel = Math.max(0.0001, 0.002 - tailFactor * 0.0018);
+    // Envelope follower — release matched to sustain (not space)
+    const tailFactor = this.sustain;
+    const slowRel = Math.max(0.00005, 0.001 - tailFactor * 0.00095);
 
     for (let i = 0; i < N; i++) {
       const dryL = inL[i] * 0.7;
@@ -249,21 +249,22 @@ class DioramaticProcessor extends AudioWorkletProcessor {
 
       // === GRAIN TRIGGERS ===
 
-      // Cloud grains (Smear): time-blurring wash, gated by input level
+      // Cloud grains: wind-chime trailing — sparser as input fades
+      const gateStretch = envGate > 0.01 ? 1/envGate : 100;
       this.cloudTimer++;
-      if (this.cloudTimer >= cloudRate && envGate > 0.01) {
+      if (this.cloudTimer >= cloudRate * Math.min(gateStretch, 50) && envGate > 0.005) {
         this.cloudTimer = 0;
         const sp = this.rng() < 0.85 ? 1 : 2;
-        this.triggerGrain(sp, (0.2 + this.sustain * 0.3) * envGate, cloudLenMs + this.rng() * 20, panWidth);
+        this.triggerGrain(sp, (0.2 + this.sustain * 0.3) * Math.sqrt(envGate), cloudLenMs + this.rng() * 20, panWidth);
       }
 
-      // Shimmer grains: octave-up sparkle texture, gated by input
+      // Shimmer grains: same wind-chime trailing
       this.shimmerGrainTimer++;
-      if (this.shimmerGrainTimer >= shimGrainRate && envGate > 0.01) {
+      if (this.shimmerGrainTimer >= shimGrainRate * Math.min(gateStretch, 50) && envGate > 0.005) {
         this.shimmerGrainTimer = 0;
-        this.triggerGrain(2, (0.12 + this.shimmer * 0.25) * envGate, sustainGrainLen + this.rng() * 100, panWidth * 0.8);
-        if (this.rng() < 0.15 + this.shimmer * 0.3) {
-          this.triggerGrain(4, (0.2 + this.shimmer * 0.2) * envGate, 2 + this.rng() * 5, panWidth);
+        this.triggerGrain(2, (0.12 + this.shimmer * 0.25) * Math.sqrt(envGate), sustainGrainLen + this.rng() * 100, panWidth * 0.8);
+        if (this.rng() < (0.15 + this.shimmer * 0.3) * envGate) {
+          this.triggerGrain(4, (0.2 + this.shimmer * 0.2) * Math.sqrt(envGate), 2 + this.rng() * 5, panWidth);
         }
       }
 

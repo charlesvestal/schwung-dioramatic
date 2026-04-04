@@ -53,6 +53,8 @@ typedef struct {
     float env_phase;
     float env_inc;
     float pan_l, pan_r;
+    float lp_state;    /* per-grain one-pole LP for darkening over lifetime */
+    float lp_target;   /* cutoff sweeps from 1.0 (bright) toward this as grain ages */
 } grain_t;
 
 typedef struct { float ic1, ic2; } svf_state_t;
@@ -163,6 +165,7 @@ static void trigger_grain(dioramatic_instance_t *inst, float speed, float amp,
 
     int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
     if (len < 128) len = 128;
+    if (len > CAPTURE_SAMPLES - 1) len = CAPTURE_SAMPLES - 1;
 
     int recent = (int)(SAMPLE_RATE * 0.05f + rng_float(&inst->rng_state) * SAMPLE_RATE * 0.4f);
     g->active = 1;
@@ -178,6 +181,12 @@ static void trigger_grain(dioramatic_instance_t *inst, float speed, float amp,
     float pan_pos = (rng_float(&inst->rng_state) - 0.5f) * pan_width * 0.7f;
     g->pan_l = sqrtf(0.5f - pan_pos * 0.5f);
     g->pan_r = sqrtf(0.5f + pan_pos * 0.5f);
+
+    /* Per-grain darkening filter: starts bright, sweeps darker as grain ages.
+       At high sustain, grains darken significantly — like a piano string
+       losing high harmonics as it rings out. */
+    g->lp_state = 0.0f;
+    g->lp_target = 0.3f - inst->sustain * 0.25f;  /* 0.3 (mild) to 0.05 (very dark) at end */
 }
 
 /* ============================================================================
@@ -394,12 +403,13 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         block_rms += l * l + r * r;
     }
     block_rms = sqrtf(block_rms / (float)(frames * 2));
-    /* Fast attack, release matched to reverb tail length.
-       Sustain+Space control how long the reverb rings, so grains should
-       trail off at the same rate — they're part of the same sound. */
-    float tail_factor = (inst->sustain + inst->space) * 0.5f;  /* 0=short, 1=long */
-    float fast_release = 0.005f - tail_factor * 0.004f;        /* 0.005 → 0.001 */
-    float slow_release = 0.002f - tail_factor * 0.0018f;       /* 0.002 → 0.0002 (~5s at max) */
+    /* Grain trailing release matched to Sustain.
+       Space controls reverb size independently.
+       At high sustain, grains keep re-triggering for many seconds
+       after input stops, getting sparser and darker over time. */
+    float tail_factor = inst->sustain;
+    float fast_release = 0.005f - tail_factor * 0.0045f;       /* 0.005 → 0.0005 */
+    float slow_release = 0.001f - tail_factor * 0.00095f;      /* 0.001 → 0.00005 (~20s at max) */
     if (fast_release < 0.0005f) fast_release = 0.0005f;
     if (slow_release < 0.0001f) slow_release = 0.0001f;
 
@@ -432,29 +442,37 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         /* === GRAIN TRIGGERS === */
 
         /* Cloud grains (Smear): short grains forming a wash.
-           Density and amplitude scale with envelope follower so grains
-           trail off naturally after input stops — like a reverb tail. */
-        inst->cloud_timer++;
-        if (inst->cloud_timer >= cloud_rate && env_gate > 0.01f) {
-            inst->cloud_timer = 0;
-            float sp = rng_float(&inst->rng_state) < 0.85f ? 1.0f : 2.0f;
-            float amp = (0.2f + inst->sustain * 0.3f) * env_gate;
-            trigger_grain(inst, sp, amp, cloud_len_ms + rng_float(&inst->rng_state) * 20.0f, pan_width);
+           As input fades, grains get sparser AND darker — like a wind chime
+           slowing down. Trigger interval stretches as env_gate drops. */
+        {
+            float gate_stretch = (env_gate > 0.01f) ? (1.0f / env_gate) : 100.0f;
+            int effective_cloud_rate = (int)((float)cloud_rate * fminf(gate_stretch, 50.0f));
+            inst->cloud_timer++;
+            if (inst->cloud_timer >= effective_cloud_rate && env_gate > 0.005f) {
+                inst->cloud_timer = 0;
+                float sp = rng_float(&inst->rng_state) < 0.85f ? 1.0f : 2.0f;
+                float amp = (0.2f + inst->sustain * 0.3f) * sqrtf(env_gate);
+                trigger_grain(inst, sp, amp, cloud_len_ms + rng_float(&inst->rng_state) * 20.0f, pan_width);
+            }
         }
 
-        /* Shimmer grains: sustained octave-up smear + occasional bright ping.
-           Also gates with envelope follower for natural trailing. */
-        inst->shimmer_grain_timer++;
-        if (inst->shimmer_grain_timer >= shim_grain_rate && env_gate > 0.01f) {
-            inst->shimmer_grain_timer = 0;
-            float amp = (0.12f + inst->shimmer * 0.25f) * env_gate;
-            trigger_grain(inst, 2.0f, amp,
-                          sustain_grain_len + rng_float(&inst->rng_state) * 100.0f,
-                          pan_width * 0.8f);
-            /* Occasional bright ping */
-            if (rng_float(&inst->rng_state) < 0.15f + inst->shimmer * 0.3f) {
-                trigger_grain(inst, 4.0f, (0.2f + inst->shimmer * 0.2f) * env_gate,
-                              3.0f + rng_float(&inst->rng_state) * 5.0f, pan_width);
+        /* Shimmer grains: same wind-chime trailing behavior.
+           Gets sparser and softer as input fades. */
+        {
+            float gate_stretch = (env_gate > 0.01f) ? (1.0f / env_gate) : 100.0f;
+            int effective_shim_rate = (int)((float)shim_grain_rate * fminf(gate_stretch, 50.0f));
+            inst->shimmer_grain_timer++;
+            if (inst->shimmer_grain_timer >= effective_shim_rate && env_gate > 0.005f) {
+                inst->shimmer_grain_timer = 0;
+                float amp = (0.12f + inst->shimmer * 0.25f) * sqrtf(env_gate);
+                trigger_grain(inst, 2.0f, amp,
+                              sustain_grain_len + rng_float(&inst->rng_state) * 100.0f,
+                              pan_width * 0.8f);
+                /* Occasional bright ping — rarer as it fades */
+                if (rng_float(&inst->rng_state) < (0.15f + inst->shimmer * 0.3f) * env_gate) {
+                    trigger_grain(inst, 4.0f, (0.2f + inst->shimmer * 0.2f) * sqrtf(env_gate),
+                                  3.0f + rng_float(&inst->rng_state) * 5.0f, pan_width);
+                }
             }
         }
 
@@ -473,6 +491,14 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
                          + inst->capture.buffer[idx1].l * frac;
             float samp_r = inst->capture.buffer[idx0].r * (1.0f - frac)
                          + inst->capture.buffer[idx1].r * frac;
+
+            /* Per-grain darkening filter: one-pole LP that closes as grain ages.
+               Coefficient sweeps from ~1.0 (open) toward lp_target (dark) over lifetime.
+               Like a piano string losing brightness as it decays. */
+            float lp_coeff = 1.0f - gr->env_phase * (1.0f - gr->lp_target);
+            gr->lp_state += lp_coeff * (((samp_l + samp_r) * 0.5f) - gr->lp_state);
+            samp_l = samp_l * lp_coeff + gr->lp_state * (1.0f - lp_coeff);
+            samp_r = samp_r * lp_coeff + gr->lp_state * (1.0f - lp_coeff);
 
             int env_idx = (int)(gr->env_phase * (float)(ENV_TABLE_SIZE - 1));
             if (env_idx > ENV_TABLE_SIZE - 1) env_idx = ENV_TABLE_SIZE - 1;
