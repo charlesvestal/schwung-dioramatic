@@ -1,11 +1,11 @@
 /*
- * Dioramatic — Granular Shimmer Effect
+ * Dioramatic — Granular Shimmer Reverb
  *
- * A single cohesive instrument with 8 musical controls:
- * Space, Shimmer, Smear, Warmth, Drift, Sustain, Scatter, Mix
+ * A shimmer reverb where the pitch shifter in the feedback loop is GRANULAR.
+ * This creates a reverb tail made of sparkly crystalline reflections that
+ * cascade upward with each cycle. The Valhalla/Eno/Lanois architecture.
  *
- * DSP: grain cloud + shimmer grains → SVF filter → FDN reverb with
- * shimmer pitch-shift feedback, modulated allpass, stereo decorrelation
+ * 8 controls: Space, Shimmer, Smear, Warmth, Drift, Sustain, Scatter, Mix
  */
 
 #include <stdio.h>
@@ -16,615 +16,374 @@
 
 #include "audio_fx_api_v2.h"
 
-#define SAMPLE_RATE 44100
-#define CAPTURE_SAMPLES (SAMPLE_RATE * 2)
-#define MAX_GRAINS 32
-#define ENV_TABLE_SIZE 256
+#define SR 44100
+#define FDN_SIZE 8192
 #define FDN_LINES 4
-#define FDN_MAX_DELAY 8192
-#define FDN_NUM_AP 4
-#define FDN_AP_MAX 512
-#define SHIMMER_BUF_SIZE 4096
-#define SHIMMER_GRAIN_SIZE 1024
+#define SHIM_BUF 8192         /* shimmer granular pitch shift buffer */
+#define SHIM_MAX_GRAINS 16    /* grains inside the pitch shifter */
+#define AP_STAGES 4
+#define AP_MAX 512
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
-/* ============================================================================
- * Types
- * ============================================================================ */
+/* ============================================================================ */
 
-typedef struct { float l, r; } stereo_sample_t;
+typedef struct { float ic1, ic2; } svf_t;
 
-typedef struct {
-    stereo_sample_t buffer[CAPTURE_SAMPLES];
-    int write_pos;
-} capture_buffer_t;
-
+/* A grain inside the shimmer pitch shifter (lives in the feedback loop) */
 typedef struct {
     int active;
-    int start;
-    int length;
-    float position;
-    float speed;
-    float detune;
-    float amplitude;
+    float read_pos;   /* fractional position in shimmer buffer */
+    float speed;      /* 2.0 = octave up */
     float env_phase;
     float env_inc;
+    float amp;
     float pan_l, pan_r;
-    float lp_state;    /* per-grain one-pole LP for darkening over lifetime */
-    float lp_target;   /* cutoff sweeps from 1.0 (bright) toward this as grain ages */
-} grain_t;
-
-typedef struct { float ic1, ic2; } svf_state_t;
+    float detune;
+} shim_grain_t;
 
 typedef struct {
-    float lines[FDN_LINES][FDN_MAX_DELAY];
-    int write_pos[FDN_LINES];
-    float lp_state[FDN_LINES];
-    float ap_buf[FDN_NUM_AP][FDN_AP_MAX];
-    int ap_pos[FDN_NUM_AP];
-    float mod_phase[FDN_LINES];
-    /* Shimmer pitch shift */
-    float shimmer_buf[SHIMMER_BUF_SIZE];
-    int shimmer_write_pos;
-    float shimmer_read_phase;
-    /* Feedback allpass for lush tail */
+    /* 8 musical params */
+    float space, shimmer, smear, warmth, drift, sustain, scatter, mix;
+
+    /* FDN reverb delay lines */
+    float lines[FDN_LINES][FDN_SIZE];
+    int line_pos[FDN_LINES];
+    float line_lp[FDN_LINES];   /* per-line damping state */
+    float line_mod[FDN_LINES];  /* modulation phase */
+
+    /* Input allpass diffusers */
+    float ap_buf[AP_STAGES][AP_MAX];
+    int ap_pos[AP_STAGES];
+
+    /* Feedback allpass diffusers (for density in the tail) */
     float fb_ap_buf[2][512];
     int fb_ap_pos[2];
-    float fb_ap_mod_phase[2];
+    float fb_ap_mod[2];
+
+    /* Shimmer: granular pitch shifter in the feedback loop */
+    float shim_buf_l[SHIM_BUF];
+    float shim_buf_r[SHIM_BUF];
+    int shim_write;
+    shim_grain_t shim_grains[SHIM_MAX_GRAINS];
+    int shim_trigger_timer;
+
     /* Stereo decorrelation */
     float stereo_buf[1024];
     int stereo_pos;
+
     /* Sparkle shelf */
-    float sparkle_state_l, sparkle_state_r;
-} fdn_reverb_t;
+    float sparkle_l, sparkle_r;
 
-typedef struct {
-    /* 8 musical parameters (0-1) */
-    float space;
-    float shimmer;
-    float smear;
-    float warmth;
-    float drift;
-    float sustain;
-    float scatter;
-    float mix;
-
-    /* Capture buffer */
-    capture_buffer_t capture;
-
-    /* Grain engine */
-    grain_t grains[MAX_GRAINS];
-    float env_table[ENV_TABLE_SIZE];
-    uint32_t rng_state;
-
-    /* Burst scatter system: detects transients and fires a burst of grains
-       that get farther apart over time — like a bouncing ball or thrown crystals.
-       Each burst reads from the same capture position (the transient). */
-    float burst_energy;        /* fast input energy tracker */
-    float burst_energy_slow;   /* slow average for adaptive threshold */
-    int burst_active;          /* grains remaining in current burst */
-    int burst_timer;           /* samples until next grain in burst */
-    int burst_interval;        /* current interval (grows each grain) */
-    int burst_origin;          /* capture buffer position of the transient */
-    int burst_count;           /* total grains fired in this burst */
-    int burst_debounce;        /* prevent re-triggering too soon */
-
-    /* LFO */
-    float lfo_phase;
-
-    /* SVF filter */
-    svf_state_t svf_l, svf_r;
-
-    /* FDN reverb */
-    fdn_reverb_t reverb;
-
-    /* Wet feedback for capture buffer (the Eno/Lanois loop) */
-    float prev_wet_l, prev_wet_r;
+    /* SVF output filter */
+    svf_t svf_l, svf_r;
 
     /* DC blocker */
-    float dc_prev_in_l, dc_prev_in_r, dc_prev_out_l, dc_prev_out_r;
+    float dc_in_l, dc_in_r, dc_out_l, dc_out_r;
 
+    /* RNG */
+    uint32_t rng;
 } dioramatic_instance_t;
 
-/* ============================================================================
- * Globals
- * ============================================================================ */
-
 static const host_api_v1_t *g_host = NULL;
-static audio_fx_api_v2_t g_fx_api_v2;
+static audio_fx_api_v2_t g_api;
 
-/* ============================================================================
- * Utilities
- * ============================================================================ */
+/* ============================================================================ */
 
-static inline uint32_t rng_next(uint32_t *state) {
-    *state = *state * 1664525u + 1013904223u;
-    return *state;
+static inline float rngf(uint32_t *s) {
+    *s = *s * 1664525u + 1013904223u;
+    return (float)(*s >> 8) / 16777216.0f;
 }
 
-static inline float rng_float(uint32_t *state) {
-    return (float)(rng_next(state) >> 8) / 16777216.0f;
-}
-
-static int json_get_number(const char *json, const char *key, float *out) {
-    char search[64];
-    snprintf(search, sizeof(search), "\"%s\":", key);
-    const char *p = strstr(json, search);
+static int json_num(const char *j, const char *k, float *o) {
+    char s[64]; snprintf(s, 64, "\"%s\":", k);
+    const char *p = strstr(j, s);
     if (!p) return -1;
-    p += strlen(search);
-    while (*p == ' ' || *p == '\t') p++;
+    p += strlen(s); while (*p == ' ') p++;
     if (*p == '"') p++;
-    *out = (float)atof(p);
-    return 0;
+    *o = (float)atof(p); return 0;
 }
 
-/* ============================================================================
- * Grain trigger
- * ============================================================================ */
+/* Trigger a shimmer grain (inside the pitch shifter) */
+static void shim_trigger(dioramatic_instance_t *inst, float grain_size_ms) {
+    for (int i = 0; i < SHIM_MAX_GRAINS; i++) {
+        shim_grain_t *g = &inst->shim_grains[i];
+        if (g->active) continue;
 
-static void trigger_grain(dioramatic_instance_t *inst, float speed, float amp,
-                          float len_ms, float pan_width) {
-    grain_t *g = NULL;
-    for (int i = 0; i < MAX_GRAINS; i++) {
-        if (!inst->grains[i].active) { g = &inst->grains[i]; break; }
+        int grain_len = (int)(SR * grain_size_ms / 1000.0f);
+        if (grain_len < 128) grain_len = 128;
+        if (grain_len > SHIM_BUF / 2) grain_len = SHIM_BUF / 2;
+
+        /* Start reading from a random recent position in the shimmer buffer */
+        int offset = (int)(rngf(&inst->rng) * (float)(SHIM_BUF / 2));
+        g->read_pos = (float)((inst->shim_write - grain_len - offset + SHIM_BUF) & (SHIM_BUF - 1));
+        g->speed = 2.0f;  /* octave up */
+        g->detune = 1.0f + (rngf(&inst->rng) - 0.5f) * 0.012f;  /* ±10 cents */
+        g->env_phase = 0.0f;
+        g->env_inc = 1.0f / (float)grain_len;
+        g->amp = 0.5f + rngf(&inst->rng) * 0.3f;
+        float pan = (rngf(&inst->rng) - 0.5f) * inst->scatter * 0.7f;
+        g->pan_l = sqrtf(0.5f - pan * 0.5f);
+        g->pan_r = sqrtf(0.5f + pan * 0.5f);
+        g->active = 1;
+        return;
     }
-    if (!g) return;
-
-    int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
-    if (len < 128) len = 128;
-    if (len > CAPTURE_SAMPLES - 1) len = CAPTURE_SAMPLES - 1;
-
-    int recent = (int)(SAMPLE_RATE * 0.05f + rng_float(&inst->rng_state) * SAMPLE_RATE * 0.4f);
-    g->active = 1;
-    g->start = (inst->capture.write_pos - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-    g->length = len;
-    g->position = 0.0f;
-    g->speed = speed;
-    g->amplitude = amp;
-    g->env_phase = 0.0f;
-    g->env_inc = 1.0f / (float)len;
-    g->detune = 1.0f + (rng_float(&inst->rng_state) - 0.5f) * 0.009f;
-
-    float pan_pos = (rng_float(&inst->rng_state) - 0.5f) * pan_width * 0.7f;
-    g->pan_l = sqrtf(0.5f - pan_pos * 0.5f);
-    g->pan_r = sqrtf(0.5f + pan_pos * 0.5f);
-
-    /* Per-grain darkening filter: starts bright, sweeps darker as grain ages.
-       At high sustain, grains darken significantly — like a piano string
-       losing high harmonics as it rings out. */
-    g->lp_state = 0.0f;
-    g->lp_target = 0.3f - inst->sustain * 0.25f;  /* 0.3 (mild) to 0.05 (very dark) at end */
 }
 
-/* ============================================================================
- * SVF lowpass
- * ============================================================================ */
+/* ============================================================================ */
 
-static inline float svf_tick(svf_state_t *s, float input, float a1, float a2, float a3) {
-    float v3 = input - s->ic2;
-    float v1 = a1 * s->ic1 + a2 * v3;
-    float v2 = s->ic2 + a2 * s->ic1 + a3 * v3;
-    s->ic1 = 2.0f * v1 - s->ic1;
-    s->ic2 = 2.0f * v2 - s->ic2;
-    return v2;
-}
-
-/* ============================================================================
- * FDN reverb with shimmer, feedback allpass, stereo decorrelation
- * ============================================================================ */
-
-static void fdn_process(fdn_reverb_t *rev, float in_l, float in_r,
-                         float *out_l, float *out_r,
-                         const int *lengths, float feedback, float damping,
-                         float shim_amount, float mod_depth) {
-
-    /* Input diffusion */
-    float diff = (in_l + in_r) * 0.5f;
-    static const int ap_lens[FDN_NUM_AP] = {241, 173, 419, 313};
-    for (int i = 0; i < FDN_NUM_AP; i++) {
-        float delayed = rev->ap_buf[i][rev->ap_pos[i]];
-        float ap_out = delayed - 0.5f * diff;
-        rev->ap_buf[i][rev->ap_pos[i]] = diff + 0.5f * ap_out;
-        diff = ap_out;
-        rev->ap_pos[i] = (rev->ap_pos[i] + 1) % ap_lens[i];
-    }
-
-    /* Read delay lines with modulation */
-    float taps[FDN_LINES];
-    static const float mod_rates[FDN_LINES] = {0.37f, 0.47f, 0.31f, 0.53f};
-    for (int i = 0; i < FDN_LINES; i++) {
-        float mod_off = sinf(2.0f * (float)M_PI * rev->mod_phase[i]) * mod_depth;
-        float frac_delay = (float)lengths[i] + mod_off;
-        if (frac_delay < 1.0f) frac_delay = 1.0f;
-        if (frac_delay >= (float)(FDN_MAX_DELAY - 1)) frac_delay = (float)(FDN_MAX_DELAY - 2);
-        int rd_int = (int)frac_delay;
-        float rd_frac = frac_delay - (float)rd_int;
-        int rp0 = (rev->write_pos[i] - rd_int + FDN_MAX_DELAY) & (FDN_MAX_DELAY - 1);
-        int rp1 = (rp0 - 1 + FDN_MAX_DELAY) & (FDN_MAX_DELAY - 1);
-        taps[i] = rev->lines[i][rp0] * (1.0f - rd_frac) + rev->lines[i][rp1] * rd_frac;
-        rev->mod_phase[i] += mod_rates[i] / (float)SAMPLE_RATE;
-        if (rev->mod_phase[i] >= 1.0f) rev->mod_phase[i] -= 1.0f;
-    }
-
-    /* Hadamard mixing */
-    float mx[FDN_LINES];
-    mx[0] = 0.5f * (taps[0] + taps[1] + taps[2] + taps[3]);
-    mx[1] = 0.5f * (taps[0] - taps[1] + taps[2] - taps[3]);
-    mx[2] = 0.5f * (taps[0] + taps[1] - taps[2] - taps[3]);
-    mx[3] = 0.5f * (taps[0] - taps[1] - taps[2] + taps[3]);
-
-    /* Shimmer pitch shift (octave up via two crossfaded grains) */
-    float fb_mono = (mx[0] + mx[1] + mx[2] + mx[3]) * 0.25f;
-    rev->shimmer_buf[rev->shimmer_write_pos] = fb_mono;
-    rev->shimmer_write_pos = (rev->shimmer_write_pos + 1) & (SHIMMER_BUF_SIZE - 1);
-
-    int rd_a = (int)rev->shimmer_read_phase;
-    float fr_a = rev->shimmer_read_phase - (float)rd_a;
-    float s_a = rev->shimmer_buf[rd_a & (SHIMMER_BUF_SIZE - 1)] * (1.0f - fr_a)
-              + rev->shimmer_buf[(rd_a + 1) & (SHIMMER_BUF_SIZE - 1)] * fr_a;
-    float e_a = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * fmodf(rev->shimmer_read_phase / (float)SHIMMER_GRAIN_SIZE, 1.0f)));
-
-    float ph_b = rev->shimmer_read_phase + (float)(SHIMMER_GRAIN_SIZE / 2);
-    int rd_b = (int)ph_b;
-    float fr_b = ph_b - (float)rd_b;
-    float s_b = rev->shimmer_buf[rd_b & (SHIMMER_BUF_SIZE - 1)] * (1.0f - fr_b)
-              + rev->shimmer_buf[(rd_b + 1) & (SHIMMER_BUF_SIZE - 1)] * fr_b;
-    float e_b = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * fmodf(ph_b / (float)SHIMMER_GRAIN_SIZE, 1.0f)));
-
-    float shim_out = s_a * e_a + s_b * e_b;
-    rev->shimmer_read_phase += 2.0f;
-    /* Wrap to prevent float precision loss */
-    while (rev->shimmer_read_phase >= (float)SHIMMER_BUF_SIZE)
-        rev->shimmer_read_phase -= (float)SHIMMER_BUF_SIZE;
-    /* Keep read phase near write */
-    float dist = (float)rev->shimmer_write_pos - rev->shimmer_read_phase;
-    if (dist < 0) dist += (float)SHIMMER_BUF_SIZE;
-    if (dist > (float)(SHIMMER_BUF_SIZE - SHIMMER_GRAIN_SIZE)) {
-        rev->shimmer_read_phase = (float)rev->shimmer_write_pos - (float)(SHIMMER_BUF_SIZE / 2);
-        if (rev->shimmer_read_phase < 0) rev->shimmer_read_phase += (float)SHIMMER_BUF_SIZE;
-    }
-
-    /* Feedback allpass for lush tail density */
-    float fb_diff = fb_mono;
-    static const int fb_ap_lens[2] = {347, 461};
-    static const float fb_ap_rates[2] = {0.23f, 0.29f};
-    for (int ap = 0; ap < 2; ap++) {
-        float mod = sinf(2.0f * (float)M_PI * rev->fb_ap_mod_phase[ap]) * 3.0f;
-        int rd = (rev->fb_ap_pos[ap] - fb_ap_lens[ap] - (int)mod + 512) & 511;
-        float delayed = rev->fb_ap_buf[ap][rd];
-        float ap_out = delayed - 0.45f * fb_diff;
-        rev->fb_ap_buf[ap][rev->fb_ap_pos[ap]] = fb_diff + 0.45f * ap_out;
-        fb_diff = ap_out;
-        rev->fb_ap_pos[ap] = (rev->fb_ap_pos[ap] + 1) & 511;
-        rev->fb_ap_mod_phase[ap] += fb_ap_rates[ap] / (float)SAMPLE_RATE;
-        if (rev->fb_ap_mod_phase[ap] >= 1.0f) rev->fb_ap_mod_phase[ap] -= 1.0f;
-    }
-
-    /* Write feedback + shimmer + diffusion back to delay lines */
-    for (int i = 0; i < FDN_LINES; i++) {
-        float fb = mx[i] * feedback;
-        rev->lp_state[i] += damping * (fb - rev->lp_state[i]);
-        fb = rev->lp_state[i] + shim_out * shim_amount + fb_diff * 0.3f;
-        /* Soft limit only kicks in on large signals — transparent below ±0.7 */
-        if (fb > 0.7f || fb < -0.7f)
-            fb = tanhf(fb) * 0.98f;
-        else
-            fb *= 0.998f;  /* negligible loss at normal levels */
-        rev->lines[i][rev->write_pos[i]] = diff + fb;
-        rev->write_pos[i] = (rev->write_pos[i] + 1) & (FDN_MAX_DELAY - 1);
-    }
-
-    /* Stereo output with decorrelation */
-    float raw_l = (taps[0] + taps[2]) * 0.65f;
-    float raw_r = (taps[1] + taps[3]) * 0.65f;
-
-    /* Right channel decorrelation (~8ms) */
-    rev->stereo_buf[rev->stereo_pos] = raw_r;
-    int stereo_rd = (rev->stereo_pos - 353 + 1024) & 1023;
-    raw_r = rev->stereo_buf[stereo_rd];
-    rev->stereo_pos = (rev->stereo_pos + 1) & 1023;
-
-    /* Sparkle shelf */
-    float hf_l = raw_l - rev->sparkle_state_l;
-    rev->sparkle_state_l += 0.15f * hf_l;
-    float hf_r = raw_r - rev->sparkle_state_r;
-    rev->sparkle_state_r += 0.15f * hf_r;
-
-    *out_l = raw_l + hf_l * 0.2f;
-    *out_r = raw_r + hf_r * 0.2f;
-}
-
-/* ============================================================================
- * API Implementation
- * ============================================================================ */
-
-static void *v2_create_instance(const char *module_dir, const char *config_json) {
-    (void)module_dir; (void)config_json;
+static void *create(const char *dir, const char *cfg) {
+    (void)dir; (void)cfg;
     dioramatic_instance_t *inst = calloc(1, sizeof(dioramatic_instance_t));
     if (!inst) return NULL;
-
-    inst->space = 0.55f;
-    inst->shimmer = 0.35f;
-    inst->smear = 0.40f;
-    inst->warmth = 0.45f;
-    inst->drift = 0.35f;
-    inst->sustain = 0.50f;
-    inst->scatter = 0.40f;
-    inst->mix = 0.60f;
-
-    inst->rng_state = 12345;
-
-    /* Hann envelope table */
-    for (int i = 0; i < ENV_TABLE_SIZE; i++) {
-        float t = (float)i / (float)(ENV_TABLE_SIZE - 1);
-        inst->env_table[i] = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * t));
-    }
-
-    if (g_host && g_host->log) g_host->log("dioramatic: instance created");
+    inst->space = 0.55f; inst->shimmer = 0.35f; inst->smear = 0.40f;
+    inst->warmth = 0.45f; inst->drift = 0.35f; inst->sustain = 0.50f;
+    inst->scatter = 0.40f; inst->mix = 0.60f;
+    inst->rng = 12345;
+    if (g_host && g_host->log) g_host->log("dioramatic: created");
     return inst;
 }
 
-static void v2_destroy_instance(void *instance) {
-    if (instance) free(instance);
-}
+static void destroy(void *inst) { if (inst) free(inst); }
 
-static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
-    if (!instance || !audio_inout) return;
+static void process(void *instance, int16_t *audio, int frames) {
+    if (!instance || !audio) return;
     dioramatic_instance_t *inst = (dioramatic_instance_t *)instance;
 
-    /* Derive DSP params from musical knobs */
-    float rev_send = 0.3f + inst->space * 0.7f;  /* 0.3 to 1.0 */
-    int fdn_lengths[4] = {
-        1087 + (int)(inst->space * 2500.0f),
-        1283 + (int)(inst->space * 2900.0f),
-        1447 + (int)(inst->space * 3400.0f),
-        1663 + (int)(inst->space * 3900.0f)
+    /* === DERIVE DSP PARAMS FROM KNOBS === */
+
+    /* Space: reverb delay line lengths */
+    int lengths[FDN_LINES] = {
+        1087 + (int)(inst->space * 3000.0f),
+        1283 + (int)(inst->space * 3500.0f),
+        1447 + (int)(inst->space * 3800.0f),
+        1663 + (int)(inst->space * 4200.0f)
     };
-    /* Scatter controls overall grain density + stereo spread.
-       Even at max: individual grains, not a wall. Like sparks from a comet.
-       Low scatter = one grain every ~2 seconds
-       Max scatter = ~4 grains/second (still distinct events) */
-    float density = 0.1f + inst->scatter * 0.9f;
-    float pan_width_val = inst->scatter;
+    for (int i = 0; i < FDN_LINES; i++)
+        if (lengths[i] >= FDN_SIZE) lengths[i] = FDN_SIZE - 1;
 
-    float shim_feedback = inst->shimmer * 0.12f;
-    /* Shimmer grain rate: ~one per 2s at min, ~one per 300ms at max */
-    int shim_grain_rate = inst->shimmer > 0.1f
-        ? (int)(44100.0f / (0.5f + inst->shimmer * 2.5f * density)) : 999999;
-    if (shim_grain_rate < 4410) shim_grain_rate = 4410;  /* minimum 100ms apart */
-    /* Cloud grain rate: ~one per 1.5s at min, ~one per 250ms at max */
-    int cloud_rate = inst->smear > 0.05f
-        ? (int)(44100.0f / (0.7f + inst->smear * 3.0f * density)) : 999999;
-    if (cloud_rate < 4410) cloud_rate = 4410;
-    float cloud_len_ms = 20.0f + inst->smear * 120.0f;  /* longer grains to compensate for sparsity */
-    float cutoff_hz = 200.0f * powf(100.0f, 1.0f - inst->warmth);
-    if (cutoff_hz > 20000.0f) cutoff_hz = 20000.0f;
-    /* Damping reduced at high sustain so the tail actually sustains.
-       Without this, the LP filter eats the reverb faster than feedback can sustain it. */
-    float rev_damping = (0.15f + inst->warmth * 0.5f) * (1.0f - inst->sustain * 0.7f);
-    float pitch_mod_depth = inst->drift * 0.15f;
-    float pitch_mod_rate = 0.05f + inst->drift * 0.4f;
-    float rev_mod_depth = 4.0f + inst->drift * 20.0f;
-    /* Sustain maps to feedback with an exponential curve so the top end
-       approaches unity. sustain=0: 0.7, sustain=0.5: 0.95, sustain=1: 0.999 */
-    float rev_feedback = 1.0f - (1.0f - 0.7f) * powf(1.0f - inst->sustain, 2.5f);
-    if (rev_feedback > 0.999f) rev_feedback = 0.999f;
-    float sustain_grain_len = 50.0f + inst->sustain * 350.0f;
-    float pan_width = pan_width_val;
+    /* Sustain: reverb feedback. Exponential curve — top end approaches unity */
+    float feedback = 1.0f - 0.35f * powf(1.0f - inst->sustain, 2.0f);
+    if (feedback > 0.998f) feedback = 0.998f;
 
-    /* SVF coefficients */
-    float svf_g = tanf((float)M_PI * cutoff_hz / (float)SAMPLE_RATE);
-    float svf_k = 2.0f - 0.19f;
-    float svf_a1 = 1.0f / (1.0f + svf_g * (svf_g + svf_k));
-    float svf_a2 = svf_g * svf_a1;
-    float svf_a3 = svf_g * svf_a2;
+    /* Shimmer: how much octave-up granular pitch shift feeds back */
+    float shim_level = inst->shimmer * 0.5f;
 
-    float lfo_inc = pitch_mod_rate / (float)SAMPLE_RATE;
+    /* Smear: grain size in the pitch shifter. Small=sparkly, large=smooth */
+    float grain_ms = 5.0f + inst->smear * 95.0f;  /* 5ms to 100ms */
 
-    /* No envelope gating — grains fire continuously at the rate set by
-       Smear and Shimmer knobs. They read from the capture buffer which
-       contains whatever was last played. When input stops, the grains
-       keep reading the last captured audio and the reverb tail carries
-       them. The natural decay comes from:
-       1. Per-grain Hann envelope (each grain fades itself)
-       2. Per-grain darkening filter (each grain gets warmer over its life)
-       3. The reverb tail decaying based on Sustain
-       4. The capture buffer eventually containing silence
-       This creates the wind-chime effect: grains ring out from the last
-       sound you played, getting darker, carried by reverb, until the
-       capture buffer is all silence and new grains produce nothing. */
+    /* Scatter: number of simultaneous shimmer grains + trigger rate */
+    int shim_trigger_interval = (int)(4410.0f / (1.0f + inst->scatter * 8.0f));
+    if (shim_trigger_interval < 128) shim_trigger_interval = 128;
+
+    /* Warmth: damping in feedback (inverted: more warmth = more HF absorption) */
+    float damping = (0.1f + inst->warmth * 0.6f) * (1.0f - inst->sustain * 0.5f);
+
+    /* Drift: modulation depth on delay lines */
+    float mod_depth = 4.0f + inst->drift * 24.0f;
+    static const float mod_rates[FDN_LINES] = {0.37f, 0.47f, 0.31f, 0.53f};
+
+    /* SVF filter cutoff from Warmth */
+    float cut = 200.0f * powf(100.0f, 1.0f - inst->warmth);
+    if (cut > 20000.0f) cut = 20000.0f;
+    float svfg = tanf((float)M_PI * cut / (float)SR);
+    float svfk = 2.0f - 0.19f;
+    float a1 = 1.0f / (1.0f + svfg * (svfg + svfk));
+    float a2 = svfg * a1;
+    float a3 = svfg * a2;
+
+    /* Reverb send: Space controls how much goes in */
+    float rev_send = 0.3f + inst->space * 0.7f;
+
+    /* Allpass diffuser lengths */
+    static const int ap_lens[AP_STAGES] = {241, 173, 419, 313};
+    static const int fb_ap_lens[2] = {347, 461};
+
+    /* Pitch mod LFO */
+    float lfo_rate = 0.05f + inst->drift * 0.4f;
+    float lfo_depth = inst->drift * 0.12f;
 
     for (int i = 0; i < frames; i++) {
-        float dry_l = (float)audio_inout[i * 2] / 32768.0f;
-        float dry_r = (float)audio_inout[i * 2 + 1] / 32768.0f;
+        float dry_l = (float)audio[i * 2] / 32768.0f;
+        float dry_r = (float)audio[i * 2 + 1] / 32768.0f;
 
-        /* Capture buffer — writes a mix of dry input and previous wet output.
-           The wet feedback creates a loop: grains read from reverbed material,
-           which feeds back into the reverb, cascading upward with each pass.
-           This is the Eno/Lanois architecture — the effect feeds itself.
-           Sustain controls the feedback amount (how much wet feeds back). */
-        float fb_amount = inst->sustain * 0.4f;  /* 0 to 0.4 — cascades beautifully without saturating */
-        inst->capture.buffer[inst->capture.write_pos].l = dry_l + inst->prev_wet_l * fb_amount;
-        inst->capture.buffer[inst->capture.write_pos].r = dry_r + inst->prev_wet_r * fb_amount;
-        inst->capture.write_pos = (inst->capture.write_pos + 1) % CAPTURE_SAMPLES;
-
-        /* Pitch mod LFO */
-        float lfo_val = sinf(2.0f * (float)M_PI * inst->lfo_phase);
-        float pitch_mod = powf(2.0f, pitch_mod_depth * lfo_val * (100.0f / 1200.0f));
-        inst->lfo_phase += lfo_inc;
-        if (inst->lfo_phase >= 1.0f) inst->lfo_phase -= 1.0f;
-
-        /* === GRAIN BURST SYSTEM ===
-           Detects transients in the input. On each transient, fires an
-           immediate burst of grains that scatter outward — dense at first,
-           then sparser and sparser. Like throwing crystals and hearing them
-           land one by one, each ringing through the reverb.
-
-           Scatter controls how many grains per burst (3 to 15).
-           Smear controls grain length (short sparkle to long smear).
-           Shimmer controls pitch mix (1x, 2x, 4x octave up).
-           Sustain controls how far apart the later grains spread. */
-
-        /* Transient detection: fast energy vs slow average */
-        float in_energy = dry_l * dry_l + dry_r * dry_r;
-        inst->burst_energy += 0.05f * (in_energy - inst->burst_energy);
-        inst->burst_energy_slow += 0.0005f * (in_energy - inst->burst_energy_slow);
-
-        if (inst->burst_debounce > 0) inst->burst_debounce--;
-
-        /* Detect transient: sensitive threshold, short debounce for continuous response */
-        if (inst->burst_debounce == 0 &&
-            inst->burst_energy > inst->burst_energy_slow * 2.0f + 0.0005f &&
-            inst->burst_energy > 0.0008f) {
-            /* Start a new burst! */
-            int num_grains = 8 + (int)(inst->scatter * 24.0f);  /* 8 to 32 grains */
-            inst->burst_active = num_grains;
-            inst->burst_origin = (inst->capture.write_pos - 441 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-            inst->burst_timer = 0;
-            inst->burst_interval = 64;   /* first trailing grain fires very quickly */
-            inst->burst_count = 0;
-            inst->burst_debounce = 2205;  /* ~50ms — allows rapid bursting on continuous input */
-
-            /* Fire the first grains IMMEDIATELY — the initial splash */
-            int immediate = 2 + (int)(inst->scatter * 6.0f);  /* 2 to 8 immediate */
-            for (int g = 0; g < immediate && inst->burst_active > 0; g++) {
-                float speed;
-                float r = rng_float(&inst->rng_state);
-                if (r < 0.4f) speed = 1.0f;
-                else if (r < 0.7f) speed = 2.0f;
-                else speed = 4.0f;
-                /* Weight toward octave-up based on Shimmer */
-                if (inst->shimmer > 0.5f && rng_float(&inst->rng_state) < inst->shimmer)
-                    speed = (rng_float(&inst->rng_state) < 0.5f) ? 2.0f : 4.0f;
-
-                float len = cloud_len_ms + rng_float(&inst->rng_state) * 60.0f;
-                float amp = 0.7f + inst->sustain * 0.3f;
-                /* Slight random offset from origin for timbral variation */
-                int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
-                int start_save = inst->capture.write_pos;
-                inst->capture.write_pos = (inst->burst_origin + offset) % CAPTURE_SAMPLES;
-                trigger_grain(inst, speed, amp, len, pan_width);
-                inst->capture.write_pos = start_save;
-
-                inst->burst_active--;
-                inst->burst_count++;
-            }
+        /* === INPUT DIFFUSION === */
+        float in_mono = (dry_l + dry_r) * 0.5f * rev_send;
+        float diff = in_mono;
+        for (int a = 0; a < AP_STAGES; a++) {
+            float del = inst->ap_buf[a][inst->ap_pos[a]];
+            float out = del - 0.5f * diff;
+            inst->ap_buf[a][inst->ap_pos[a]] = diff + 0.5f * out;
+            diff = out;
+            inst->ap_pos[a] = (inst->ap_pos[a] + 1) % ap_lens[a];
         }
 
-        /* Continue active burst: fire grains at increasing intervals */
-        if (inst->burst_active > 0) {
-            inst->burst_timer++;
-            if (inst->burst_timer >= inst->burst_interval) {
-                inst->burst_timer = 0;
-                /* Interval grows — comet tail. Slower growth = longer trail */
-                inst->burst_interval = (int)((float)inst->burst_interval * (1.15f + inst->sustain * 0.25f));
-                if (inst->burst_interval > 88200) inst->burst_interval = 88200;
-
-                float speed;
-                float r = rng_float(&inst->rng_state);
-                if (r < 0.3f) speed = 1.0f;
-                else if (r < 0.6f) speed = 2.0f;
-                else speed = 4.0f;
-                if (inst->shimmer > 0.5f && rng_float(&inst->rng_state) < inst->shimmer)
-                    speed = (rng_float(&inst->rng_state) < 0.5f) ? 2.0f : 4.0f;
-
-                /* Later grains are slightly quieter — gentle decay, not fast */
-                float decay = 1.0f / (1.0f + (float)inst->burst_count * 0.06f);
-                float amp = (0.7f + inst->sustain * 0.3f) * decay;
-                float len = cloud_len_ms + rng_float(&inst->rng_state) * 60.0f;
-
-                int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
-                int start_save = inst->capture.write_pos;
-                inst->capture.write_pos = (inst->burst_origin + offset) % CAPTURE_SAMPLES;
-                trigger_grain(inst, speed, amp, len, pan_width);
-                inst->capture.write_pos = start_save;
-
-                inst->burst_active--;
-                inst->burst_count++;
-            }
+        /* === READ FDN DELAY LINES (modulated) === */
+        float taps[FDN_LINES];
+        for (int l = 0; l < FDN_LINES; l++) {
+            float mod = sinf(2.0f * (float)M_PI * inst->line_mod[l]) * mod_depth;
+            float fd = (float)lengths[l] + mod;
+            if (fd < 1.0f) fd = 1.0f;
+            if (fd >= (float)(FDN_SIZE - 1)) fd = (float)(FDN_SIZE - 2);
+            int ri = (int)fd;
+            float rf = fd - (float)ri;
+            int p0 = (inst->line_pos[l] - ri + FDN_SIZE) & (FDN_SIZE - 1);
+            int p1 = (p0 - 1 + FDN_SIZE) & (FDN_SIZE - 1);
+            taps[l] = inst->lines[l][p0] * (1.0f - rf) + inst->lines[l][p1] * rf;
+            inst->line_mod[l] += mod_rates[l] / (float)SR;
+            if (inst->line_mod[l] >= 1.0f) inst->line_mod[l] -= 1.0f;
         }
 
-        /* === GRAIN PLAYBACK === */
-        float wet_l = 0.0f, wet_r = 0.0f;
-        for (int g = 0; g < MAX_GRAINS; g++) {
-            grain_t *gr = &inst->grains[g];
+        /* === HADAMARD MIX === */
+        float mx[FDN_LINES];
+        mx[0] = 0.5f * (taps[0] + taps[1] + taps[2] + taps[3]);
+        mx[1] = 0.5f * (taps[0] - taps[1] + taps[2] - taps[3]);
+        mx[2] = 0.5f * (taps[0] + taps[1] - taps[2] - taps[3]);
+        mx[3] = 0.5f * (taps[0] - taps[1] - taps[2] + taps[3]);
+
+        /* === GRANULAR SHIMMER PITCH SHIFTER (in the feedback loop) ===
+           Write the mixed feedback into the shimmer buffer. Then read it
+           back with multiple overlapping grains at 2x speed (octave up).
+           This is what creates the cascading crystalline harmonics. */
+
+        float fb_mono = (mx[0] + mx[1] + mx[2] + mx[3]) * 0.25f;
+        inst->shim_buf_l[inst->shim_write] = (taps[0] + taps[2]) * 0.5f;
+        inst->shim_buf_r[inst->shim_write] = (taps[1] + taps[3]) * 0.5f;
+        inst->shim_write = (inst->shim_write + 1) & (SHIM_BUF - 1);
+
+        /* Trigger new shimmer grains at a rate controlled by Scatter */
+        inst->shim_trigger_timer++;
+        if (inst->shim_trigger_timer >= shim_trigger_interval) {
+            inst->shim_trigger_timer = 0;
+            shim_trigger(inst, grain_ms);
+        }
+
+        /* Read shimmer grains — the sparkly octave-up layer */
+        float shim_l = 0.0f, shim_r = 0.0f;
+        for (int g = 0; g < SHIM_MAX_GRAINS; g++) {
+            shim_grain_t *gr = &inst->shim_grains[g];
             if (!gr->active) continue;
 
-            int base_idx = gr->start + (int)gr->position;
-            int idx0 = ((base_idx % CAPTURE_SAMPLES) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-            int idx1 = (idx0 + 1) % CAPTURE_SAMPLES;
-            float frac = gr->position - floorf(gr->position);
+            int ri = (int)gr->read_pos;
+            float rf = gr->read_pos - (float)ri;
+            int i0 = ri & (SHIM_BUF - 1);
+            int i1 = (ri + 1) & (SHIM_BUF - 1);
+            float sl = inst->shim_buf_l[i0] * (1.0f - rf) + inst->shim_buf_l[i1] * rf;
+            float sr = inst->shim_buf_r[i0] * (1.0f - rf) + inst->shim_buf_r[i1] * rf;
 
-            float samp_l = inst->capture.buffer[idx0].l * (1.0f - frac)
-                         + inst->capture.buffer[idx1].l * frac;
-            float samp_r = inst->capture.buffer[idx0].r * (1.0f - frac)
-                         + inst->capture.buffer[idx1].r * frac;
+            /* Hann envelope */
+            float env = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * gr->env_phase));
 
+            float a = gr->amp * env;
+            shim_l += sl * a * gr->pan_l;
+            shim_r += sr * a * gr->pan_r;
 
-            int env_idx = (int)(gr->env_phase * (float)(ENV_TABLE_SIZE - 1));
-            if (env_idx > ENV_TABLE_SIZE - 1) env_idx = ENV_TABLE_SIZE - 1;
-            float env = inst->env_table[env_idx];
+            gr->read_pos += gr->speed * gr->detune;
+            /* Wrap */
+            while (gr->read_pos >= (float)SHIM_BUF) gr->read_pos -= (float)SHIM_BUF;
+            while (gr->read_pos < 0) gr->read_pos += (float)SHIM_BUF;
 
-            float amp = gr->amplitude * env;
-            wet_l += samp_l * amp * gr->pan_l;
-            wet_r += samp_r * amp * gr->pan_r;
-
-            gr->position += gr->speed * gr->detune * pitch_mod;
             gr->env_phase += gr->env_inc;
             if (gr->env_phase >= 1.0f) gr->active = 0;
         }
 
-        /* SVF lowpass filter */
-        wet_l = svf_tick(&inst->svf_l, wet_l, svf_a1, svf_a2, svf_a3);
-        wet_r = svf_tick(&inst->svf_r, wet_r, svf_a1, svf_a2, svf_a3);
-
-        /* FDN reverb — processes BOTH dry input AND grains.
-           The dry signal creates the big lush sustained wash.
-           The grains add sparkle/shimmer character on top.
-           This is why it rings out: the reverb has the full input. */
-        float rev_l = 0.0f, rev_r = 0.0f;
-        if (rev_send > 0.01f) {
-            float rev_in_l = (dry_l + wet_l) * rev_send;
-            float rev_in_r = (dry_r + wet_r) * rev_send;
-            fdn_process(&inst->reverb, rev_in_l, rev_in_r,
-                        &rev_l, &rev_r, fdn_lengths, rev_feedback,
-                        rev_damping, shim_feedback, rev_mod_depth);
-            wet_l += rev_l;
-            wet_r += rev_r;
+        /* === FEEDBACK ALLPASS DIFFUSION (for density) === */
+        float fb_diff = fb_mono;
+        for (int a = 0; a < 2; a++) {
+            float mod = sinf(2.0f * (float)M_PI * inst->fb_ap_mod[a]) * 3.0f;
+            int rd = (inst->fb_ap_pos[a] - fb_ap_lens[a] - (int)mod + 512) & 511;
+            float del = inst->fb_ap_buf[a][rd];
+            float out = del - 0.45f * fb_diff;
+            inst->fb_ap_buf[a][inst->fb_ap_pos[a]] = fb_diff + 0.45f * out;
+            fb_diff = out;
+            inst->fb_ap_pos[a] = (inst->fb_ap_pos[a] + 1) & 511;
+            inst->fb_ap_mod[a] += ((a == 0) ? 0.23f : 0.29f) / (float)SR;
+            if (inst->fb_ap_mod[a] >= 1.0f) inst->fb_ap_mod[a] -= 1.0f;
         }
 
-        /* Store wet for feedback into capture buffer next sample */
-        inst->prev_wet_l = wet_l;
-        inst->prev_wet_r = wet_r;
+        /* === WRITE BACK TO DELAY LINES ===
+           feedback = mixed × feedback_coeff + shimmer + diffusion
+           The shimmer grains create the cascading octave harmonics.
+           Each cycle through the reverb shifts them up another octave. */
+        for (int l = 0; l < FDN_LINES; l++) {
+            float fb = mx[l] * feedback;
+            /* Damping: one-pole LP in feedback */
+            inst->line_lp[l] += damping * (fb - inst->line_lp[l]);
+            fb = inst->line_lp[l];
+            /* Add shimmer (granular octave-up) */
+            fb += ((l < 2) ? shim_l : shim_r) * shim_level;
+            /* Add diffusion */
+            fb += fb_diff * 0.2f;
+            /* Soft limit — transparent at normal levels */
+            if (fb > 0.7f || fb < -0.7f)
+                fb = tanhf(fb) * 0.98f;
+            /* Write */
+            inst->lines[l][inst->line_pos[l]] = diff + fb;
+            inst->line_pos[l] = (inst->line_pos[l] + 1) & (FDN_SIZE - 1);
+        }
+
+        /* === OUTPUT === */
+        float rev_l = (taps[0] + taps[2]) * 0.6f;
+        float rev_r = (taps[1] + taps[3]) * 0.6f;
+
+        /* Stereo decorrelation on right (~8ms) */
+        inst->stereo_buf[inst->stereo_pos] = rev_r;
+        int srd = (inst->stereo_pos - 353 + 1024) & 1023;
+        rev_r = inst->stereo_buf[srd];
+        inst->stereo_pos = (inst->stereo_pos + 1) & 1023;
+
+        /* Sparkle shelf: gentle HF boost */
+        float hf_l = rev_l - inst->sparkle_l;
+        inst->sparkle_l += 0.15f * hf_l;
+        float hf_r = rev_r - inst->sparkle_r;
+        inst->sparkle_r += 0.15f * hf_r;
+        rev_l += hf_l * 0.15f;
+        rev_r += hf_r * 0.15f;
+
+        /* SVF lowpass on output */
+        {
+            float v3 = rev_l - inst->svf_l.ic2;
+            float v1 = a1 * inst->svf_l.ic1 + a2 * v3;
+            float v2 = inst->svf_l.ic2 + a2 * inst->svf_l.ic1 + a3 * v3;
+            inst->svf_l.ic1 = 2.0f * v1 - inst->svf_l.ic1;
+            inst->svf_l.ic2 = 2.0f * v2 - inst->svf_l.ic2;
+            rev_l = v2;
+        }
+        {
+            float v3 = rev_r - inst->svf_r.ic2;
+            float v1 = a1 * inst->svf_r.ic1 + a2 * v3;
+            float v2 = inst->svf_r.ic2 + a2 * inst->svf_r.ic1 + a3 * v3;
+            inst->svf_r.ic1 = 2.0f * v1 - inst->svf_r.ic1;
+            inst->svf_r.ic2 = 2.0f * v2 - inst->svf_r.ic2;
+            rev_r = v2;
+        }
 
         /* Mix */
-        float out_l = dry_l * (1.0f - inst->mix) + wet_l * inst->mix;
-        float out_r = dry_r * (1.0f - inst->mix) + wet_r * inst->mix;
+        float out_l = dry_l * (1.0f - inst->mix) + rev_l * inst->mix;
+        float out_r = dry_r * (1.0f - inst->mix) + rev_r * inst->mix;
 
         /* DC blocker */
-        float dc_coeff = 0.9975f;
-        float dc_l = out_l - inst->dc_prev_in_l + dc_coeff * inst->dc_prev_out_l;
-        float dc_r = out_r - inst->dc_prev_in_r + dc_coeff * inst->dc_prev_out_r;
-        inst->dc_prev_in_l = out_l; inst->dc_prev_in_r = out_r;
-        inst->dc_prev_out_l = dc_l; inst->dc_prev_out_r = dc_r;
-        out_l = dc_l; out_r = dc_r;
+        float dc_l = out_l - inst->dc_in_l + 0.9975f * inst->dc_out_l;
+        float dc_r = out_r - inst->dc_in_r + 0.9975f * inst->dc_out_r;
+        inst->dc_in_l = out_l; inst->dc_in_r = out_r;
+        inst->dc_out_l = dc_l; inst->dc_out_r = dc_r;
 
         /* Soft clip */
-        out_l = tanhf(out_l * 1.5f) * 0.667f;
-        out_r = tanhf(out_r * 1.5f) * 0.667f;
+        out_l = tanhf(dc_l * 1.5f) * 0.667f;
+        out_r = tanhf(dc_r * 1.5f) * 0.667f;
 
-        audio_inout[i * 2] = (int16_t)(out_l * 32767.0f);
-        audio_inout[i * 2 + 1] = (int16_t)(out_r * 32767.0f);
+        audio[i * 2]     = (int16_t)(out_l * 32767.0f);
+        audio[i * 2 + 1] = (int16_t)(out_r * 32767.0f);
     }
 }
 
-static void v2_set_param(void *instance, const char *key, const char *val) {
+/* ============================================================================ */
+
+static void set_param(void *instance, const char *key, const char *val) {
     if (!instance || !key || !val) return;
     dioramatic_instance_t *inst = (dioramatic_instance_t *)instance;
-
     float v = fminf(1.0f, fmaxf(0.0f, (float)atof(val)));
 
     if (strcmp(key, "space") == 0) inst->space = v;
@@ -637,76 +396,67 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
     else if (strcmp(key, "mix") == 0) inst->mix = v;
     else if (strcmp(key, "state") == 0) {
         float f;
-        if (json_get_number(val, "space", &f) == 0) inst->space = f;
-        if (json_get_number(val, "shimmer", &f) == 0) inst->shimmer = f;
-        if (json_get_number(val, "smear", &f) == 0) inst->smear = f;
-        if (json_get_number(val, "warmth", &f) == 0) inst->warmth = f;
-        if (json_get_number(val, "drift", &f) == 0) inst->drift = f;
-        if (json_get_number(val, "sustain", &f) == 0) inst->sustain = f;
-        if (json_get_number(val, "scatter", &f) == 0) inst->scatter = f;
-        if (json_get_number(val, "mix", &f) == 0) inst->mix = f;
+        if (json_num(val, "space", &f) == 0) inst->space = f;
+        if (json_num(val, "shimmer", &f) == 0) inst->shimmer = f;
+        if (json_num(val, "smear", &f) == 0) inst->smear = f;
+        if (json_num(val, "warmth", &f) == 0) inst->warmth = f;
+        if (json_num(val, "drift", &f) == 0) inst->drift = f;
+        if (json_num(val, "sustain", &f) == 0) inst->sustain = f;
+        if (json_num(val, "scatter", &f) == 0) inst->scatter = f;
+        if (json_num(val, "mix", &f) == 0) inst->mix = f;
     }
 }
 
-static int v2_get_param(void *instance, const char *key, char *buf, int buf_len) {
-    if (!instance || !key || !buf || buf_len <= 0) return -1;
+static int get_param(void *instance, const char *key, char *buf, int len) {
+    if (!instance || !key || !buf || len <= 0) return -1;
     dioramatic_instance_t *inst = (dioramatic_instance_t *)instance;
 
-    if (strcmp(key, "name") == 0) return snprintf(buf, buf_len, "Dioramatic");
-    else if (strcmp(key, "space") == 0) return snprintf(buf, buf_len, "%.3f", inst->space);
-    else if (strcmp(key, "shimmer") == 0) return snprintf(buf, buf_len, "%.3f", inst->shimmer);
-    else if (strcmp(key, "smear") == 0) return snprintf(buf, buf_len, "%.3f", inst->smear);
-    else if (strcmp(key, "warmth") == 0) return snprintf(buf, buf_len, "%.3f", inst->warmth);
-    else if (strcmp(key, "drift") == 0) return snprintf(buf, buf_len, "%.3f", inst->drift);
-    else if (strcmp(key, "sustain") == 0) return snprintf(buf, buf_len, "%.3f", inst->sustain);
-    else if (strcmp(key, "scatter") == 0) return snprintf(buf, buf_len, "%.3f", inst->scatter);
-    else if (strcmp(key, "mix") == 0) return snprintf(buf, buf_len, "%.3f", inst->mix);
-    else if (strcmp(key, "state") == 0) {
-        return snprintf(buf, buf_len,
+    if (strcmp(key, "name") == 0) return snprintf(buf, len, "Dioramatic");
+    if (strcmp(key, "space") == 0) return snprintf(buf, len, "%.3f", inst->space);
+    if (strcmp(key, "shimmer") == 0) return snprintf(buf, len, "%.3f", inst->shimmer);
+    if (strcmp(key, "smear") == 0) return snprintf(buf, len, "%.3f", inst->smear);
+    if (strcmp(key, "warmth") == 0) return snprintf(buf, len, "%.3f", inst->warmth);
+    if (strcmp(key, "drift") == 0) return snprintf(buf, len, "%.3f", inst->drift);
+    if (strcmp(key, "sustain") == 0) return snprintf(buf, len, "%.3f", inst->sustain);
+    if (strcmp(key, "scatter") == 0) return snprintf(buf, len, "%.3f", inst->scatter);
+    if (strcmp(key, "mix") == 0) return snprintf(buf, len, "%.3f", inst->mix);
+    if (strcmp(key, "state") == 0)
+        return snprintf(buf, len,
             "{\"space\":%.3f,\"shimmer\":%.3f,\"smear\":%.3f,\"warmth\":%.3f,"
             "\"drift\":%.3f,\"sustain\":%.3f,\"scatter\":%.3f,\"mix\":%.3f}",
             inst->space, inst->shimmer, inst->smear, inst->warmth,
             inst->drift, inst->sustain, inst->scatter, inst->mix);
-    }
-    else if (strcmp(key, "chain_params") == 0) {
-        return snprintf(buf, buf_len,
-            "["
-            "{\"key\":\"space\",\"name\":\"Space\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
+    if (strcmp(key, "chain_params") == 0)
+        return snprintf(buf, len,
+            "[{\"key\":\"space\",\"name\":\"Space\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"shimmer\",\"name\":\"Shimmer\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"smear\",\"name\":\"Smear\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"warmth\",\"name\":\"Warmth\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"drift\",\"name\":\"Drift\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"sustain\",\"name\":\"Sustain\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"scatter\",\"name\":\"Scatter\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
-            "{\"key\":\"mix\",\"name\":\"Mix\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01}"
-            "]");
-    }
-    else if (strcmp(key, "ui_hierarchy") == 0) {
-        return snprintf(buf, buf_len,
+            "{\"key\":\"mix\",\"name\":\"Mix\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01}]");
+    if (strcmp(key, "ui_hierarchy") == 0)
+        return snprintf(buf, len,
             "{\"modes\":null,\"levels\":{\"root\":{\"children\":null,"
             "\"knobs\":[\"space\",\"shimmer\",\"smear\",\"warmth\",\"drift\",\"sustain\",\"scatter\",\"mix\"],"
             "\"params\":[\"space\",\"shimmer\",\"smear\",\"warmth\",\"drift\",\"sustain\",\"scatter\",\"mix\"]}}}");
-    }
     return -1;
 }
 
-static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) {
-    (void)instance; (void)msg; (void)len; (void)source;
+static void on_midi(void *inst, const uint8_t *msg, int len, int src) {
+    (void)inst; (void)msg; (void)len; (void)src;
 }
-
-/* ============================================================================
- * Entry point
- * ============================================================================ */
 
 audio_fx_api_v2_t *move_audio_fx_init_v2(const host_api_v1_t *host) {
     g_host = host;
-    g_fx_api_v2.api_version = AUDIO_FX_API_VERSION_2;
-    g_fx_api_v2.create_instance = v2_create_instance;
-    g_fx_api_v2.destroy_instance = v2_destroy_instance;
-    g_fx_api_v2.process_block = v2_process_block;
-    g_fx_api_v2.set_param = v2_set_param;
-    g_fx_api_v2.get_param = v2_get_param;
-    g_fx_api_v2.on_midi = v2_on_midi;
-    if (host && host->log) host->log("dioramatic: initialized");
-    return &g_fx_api_v2;
+    g_api.api_version = 2;
+    g_api.create_instance = create;
+    g_api.destroy_instance = destroy;
+    g_api.process_block = process;
+    g_api.set_param = set_param;
+    g_api.get_param = get_param;
+    g_api.on_midi = on_midi;
+    if (host && host->log) host->log("dioramatic: init");
+    return &g_api;
 }
