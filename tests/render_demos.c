@@ -173,81 +173,90 @@ static float synth_tick(synth_t *s) {
 }
 
 /*
- * Generate 8 seconds of musical content:
- * - Bars 1-2: Cmaj arpeggio (C4-E4-G4-C5 repeated)
- * - Bars 3-4: Am arpeggio (A3-C4-E4-A4)
- * - Bars 5-6: F maj chord stabs
- * - Bars 7-8: Melodic line (C D E G A G E D)
+ * Input A: Soft piano — sparse chords with space between them.
+ * Short stabs that decay, letting the reverb tail breathe.
+ * Cmaj → Am → Fmaj → G, one chord every 2 beats, quick release.
  */
-static void generate_musical_input(int16_t *buf, int total_frames) {
+static void generate_soft_piano(int16_t *buf, int total_frames) {
     synth_t synth;
     synth_init(&synth);
 
-    /* At 120 BPM, 1 beat = 22050 samples, 1 bar = 88200 samples */
-    int beat = 22050;
+    /* Slower tempo feel — chords every 2 beats at 90 BPM */
+    int beat = 44100 * 60 / 90;  /* ~29400 samples per beat */
 
-    /* Note sequences (MIDI notes) */
-    /* Cmaj arp: C4=60, E4=64, G4=67, C5=72 */
-    int cmaj_arp[] = {60, 64, 67, 72, 67, 64, 60, 64};
-    /* Am arp: A3=57, C4=60, E4=64, A4=69 */
-    int am_arp[] = {57, 60, 64, 69, 64, 60, 57, 60};
-    /* F chord stabs: F3=53, A3=57, C4=60 */
-    int fchord[] = {53, 57, 60};
-    /* Melody */
-    int melody[] = {60, 62, 64, 67, 69, 67, 64, 62};
+    /* Chord voicings (piano-like: spread, mid-register) */
+    int chords[4][4] = {
+        {60, 64, 67, 72},  /* Cmaj */
+        {57, 60, 64, 69},  /* Am */
+        {53, 57, 60, 65},  /* Fmaj */
+        {55, 59, 62, 67},  /* G */
+    };
 
+    /* Make the synth sound softer — override envelope rates */
     for (int i = 0; i < total_frames; i++) {
-        int bar = i / (beat * 4);
-        int beat_in_bar = (i % (beat * 4)) / beat;
-        int pos_in_beat = i % beat;
+        int chord_period = beat * 2;  /* one chord every 2 beats */
+        int pos_in_chord = i % chord_period;
+        int chord_idx = (i / chord_period) % 4;
 
-        /* Trigger notes at beat boundaries */
-        if (pos_in_beat == 0) {
+        if (pos_in_chord == 0) {
+            /* Trigger chord with soft attack */
             synth_note_off_all(&synth);
-
-            if (bar < 2) {
-                /* Cmaj arpeggio, 8th notes */
-                int eighth = (i % (beat * 4)) / (beat / 2);
-                if (eighth < 8) {
-                    synth_note_on(&synth, cmaj_arp[eighth % 8], 0.35f);
-                }
-            } else if (bar < 4) {
-                /* Am arpeggio */
-                int eighth = (i % (beat * 4)) / (beat / 2);
-                if (eighth < 8) {
-                    synth_note_on(&synth, am_arp[eighth % 8], 0.35f);
-                }
-            } else if (bar < 6) {
-                /* F chord stabs on beats 1 and 3 */
-                if (beat_in_bar == 0 || beat_in_bar == 2) {
-                    for (int n = 0; n < 3; n++)
-                        synth_note_on(&synth, fchord[n], 0.25f);
-                }
-            } else {
-                /* Melody, quarter notes */
-                if (beat_in_bar < 4) {
-                    int note_idx = ((bar - 6) * 4 + beat_in_bar) % 8;
-                    synth_note_on(&synth, melody[note_idx], 0.4f);
-                }
+            for (int n = 0; n < 4; n++) {
+                synth_note_on(&synth, chords[chord_idx][n], 0.2f);
+                /* Softer attack for piano-like quality */
+                synth.voices[n].env_rate = 0.003f;
             }
-
-            /* Also trigger 8th note arps within beats for bars 0-3 */
         }
 
-        /* Trigger 8th notes for arp sections */
-        if (bar < 4 && pos_in_beat == beat / 2) {
+        /* Release after 1/4 of the chord period — short stab */
+        if (pos_in_chord == chord_period / 4) {
             synth_note_off_all(&synth);
-            int eighth = (i % (beat * 4)) / (beat / 2);
-            if (bar < 2 && eighth < 8) {
-                synth_note_on(&synth, cmaj_arp[eighth % 8], 0.35f);
-            } else if (bar >= 2 && eighth < 8) {
-                synth_note_on(&synth, am_arp[eighth % 8], 0.35f);
+            /* Faster release for piano-like decay */
+            for (int v = 0; v < MAX_VOICES; v++) {
+                if (synth.voices[v].active) synth.voices[v].env_rate = 0.0008f;
             }
         }
 
         float sample = synth_tick(&synth);
 
-        /* Soft clip */
+        /* Gentle soft clip */
+        if (sample > 0.7f) sample = 0.7f;
+        if (sample < -0.7f) sample = -0.7f;
+
+        /* Reduce saw harshness — use more square (rounder) */
+        int16_t s = (int16_t)(sample * 32767.0f);
+        buf[i * 2] = s;
+        buf[i * 2 + 1] = s;
+    }
+}
+
+/*
+ * Input B: Arpeggiated synth — continuous flowing notes.
+ */
+static void generate_arp_input(int16_t *buf, int total_frames) {
+    synth_t synth;
+    synth_init(&synth);
+
+    int beat = 22050;  /* 120 BPM */
+    int cmaj_arp[] = {60, 64, 67, 72, 67, 64, 60, 64};
+    int am_arp[] = {57, 60, 64, 69, 64, 60, 57, 60};
+
+    for (int i = 0; i < total_frames; i++) {
+        int bar = i / (beat * 4);
+        int eighth = (i % (beat * 4)) / (beat / 2);
+        int pos_in_eighth = i % (beat / 2);
+
+        if (pos_in_eighth == 0) {
+            synth_note_off_all(&synth);
+            int note;
+            if ((bar % 2) == 0)
+                note = cmaj_arp[eighth % 8];
+            else
+                note = am_arp[eighth % 8];
+            synth_note_on(&synth, note, 0.3f);
+        }
+
+        float sample = synth_tick(&synth);
         if (sample > 0.95f) sample = 0.95f;
         if (sample < -0.95f) sample = -0.95f;
 
@@ -328,16 +337,24 @@ int main(void) {
     int input_frames = 44100 * input_sec;
     int tail_frames = 44100 * tail_sec;
     int total_frames = input_frames + tail_frames;
-    int16_t *input = (int16_t *)malloc(input_frames * 2 * sizeof(int16_t));
 
-    printf("Generating %d seconds of musical input + %d seconds tail...\n", input_sec, tail_sec);
-    generate_musical_input(input, input_frames);
+    /* Generate both input types */
+    int16_t *piano_input = (int16_t *)malloc(input_frames * 2 * sizeof(int16_t));
+    int16_t *arp_input = (int16_t *)malloc(input_frames * 2 * sizeof(int16_t));
 
-    /* Save dry input (no tail needed) */
+    printf("Generating soft piano input (%ds)...\n", input_sec);
+    generate_soft_piano(piano_input, input_frames);
+    printf("Generating arp input (%ds)...\n", input_sec);
+    generate_arp_input(arp_input, input_frames);
+
+    /* Save dry inputs */
     {
         char path[512];
-        snprintf(path, sizeof(path), "%s/00-dry-input.wav", output_dir);
-        write_wav(path, input, input_frames * 2);
+        snprintf(path, sizeof(path), "%s/00-dry-piano.wav", output_dir);
+        write_wav(path, piano_input, input_frames * 2);
+        printf("  Wrote: %s\n", path);
+        snprintf(path, sizeof(path), "%s/00-dry-arp.wav", output_dir);
+        write_wav(path, arp_input, input_frames * 2);
         printf("  Wrote: %s\n", path);
     }
 
@@ -354,87 +371,87 @@ int main(void) {
        voices of angels carrying music to a new dimension."
        Built from the user's favorites: Tunnel overtones, Mosaic reverse,
        ambient wash, Haze shimmer, and Blocks pitch-glitch for dynamism. */
-    /* All Ethereal algorithm (11) — exploring the parameter space.
-       Activity = sparse/delicate ↔ thick/enveloping
-       Filter = warm glow ↔ bright crystal
-       Repeats = distinct events ↔ continuous wash
-       Variation = A balanced, B cloud, C drone, D sparkle */
+    /* Ethereal presets — each rendered with BOTH piano and arp input */
     preset_t presets[] = {
-        /* === THE SWEET SPOT — balanced, musical, immediately beautiful === */
-        {"01-ethereal-A-sweetspot",
-         "{\"algorithm\":11,\"variation\":0,\"activity\":0.6,\"repeats\":0.7,"
+        /* Truly sparse: reverb wash with a rare twinkle */
+        {"sparse",
+         "{\"algorithm\":11,\"variation\":3,\"activity\":0.05,\"repeats\":0.5,"
+         "\"shape\":1.0,\"filter\":0.7,\"mix\":0.85,\"space\":0.85,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.04,\"pitch_mod_rate\":0.04,"
+         "\"filter_res\":0.1,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+
+        /* Delicate: a few grains floating in reverb */
+        {"delicate",
+         "{\"algorithm\":11,\"variation\":0,\"activity\":0.2,\"repeats\":0.6,"
+         "\"shape\":1.0,\"filter\":0.7,\"mix\":0.8,\"space\":0.8,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.05,"
+         "\"filter_res\":0.1,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+
+        /* Sweet spot: the balanced default */
+        {"sweetspot",
+         "{\"algorithm\":11,\"variation\":0,\"activity\":0.55,\"repeats\":0.7,"
          "\"shape\":1.0,\"filter\":0.7,\"mix\":0.75,\"space\":0.75,"
          "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.06,"
          "\"filter_res\":0.15,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
-        /* === ACTIVITY SWEEP — sparse to dense === */
-        {"02-ethereal-sparse-delicate",
-         "{\"algorithm\":11,\"variation\":0,\"activity\":0.25,\"repeats\":0.6,"
-         "\"shape\":1.0,\"filter\":0.75,\"mix\":0.7,\"space\":0.75,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.05,"
-         "\"filter_res\":0.1,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
-
-        {"03-ethereal-dense-enveloping",
+        /* Dense: full wall of shimmer */
+        {"dense",
          "{\"algorithm\":11,\"variation\":0,\"activity\":0.9,\"repeats\":0.85,"
          "\"shape\":1.0,\"filter\":0.65,\"mix\":0.85,\"space\":0.85,"
          "\"time_div\":2,\"pitch_mod_depth\":0.1,\"pitch_mod_rate\":0.05,"
          "\"filter_res\":0.2,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
-        /* === FILTER SWEEP — warm amber to bright crystal === */
-        {"04-ethereal-warm-glow",
-         "{\"algorithm\":11,\"variation\":0,\"activity\":0.6,\"repeats\":0.7,"
-         "\"shape\":1.0,\"filter\":0.45,\"mix\":0.75,\"space\":0.8,"
+        /* Warm glow: amber filtered */
+        {"warm",
+         "{\"algorithm\":11,\"variation\":0,\"activity\":0.5,\"repeats\":0.7,"
+         "\"shape\":1.0,\"filter\":0.4,\"mix\":0.8,\"space\":0.8,"
          "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.06,"
          "\"filter_res\":0.3,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
-        {"05-ethereal-bright-crystal",
-         "{\"algorithm\":11,\"variation\":0,\"activity\":0.6,\"repeats\":0.7,"
+        /* Bright crystal: open and airy */
+        {"bright",
+         "{\"algorithm\":11,\"variation\":0,\"activity\":0.5,\"repeats\":0.7,"
          "\"shape\":1.0,\"filter\":0.9,\"mix\":0.75,\"space\":0.8,"
          "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.06,"
          "\"filter_res\":0.05,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
-        /* === FOUR VARIATIONS === */
-        {"06-ethereal-B-cloud-wash",
-         "{\"algorithm\":11,\"variation\":1,\"activity\":0.65,\"repeats\":0.75,"
-         "\"shape\":1.0,\"filter\":0.65,\"mix\":0.8,\"space\":0.8,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.06,"
-         "\"filter_res\":0.2,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
-
-        {"07-ethereal-C-angel-drone",
-         "{\"algorithm\":11,\"variation\":2,\"activity\":0.65,\"repeats\":0.8,"
+        /* Angel drone: heavy overtone layer */
+        {"angel",
+         "{\"algorithm\":11,\"variation\":2,\"activity\":0.6,\"repeats\":0.8,"
          "\"shape\":1.0,\"filter\":0.6,\"mix\":0.8,\"space\":0.85,"
          "\"time_div\":4,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.04,"
          "\"filter_res\":0.2,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
-        {"08-ethereal-D-crystal-sparkle",
-         "{\"algorithm\":11,\"variation\":3,\"activity\":0.7,\"repeats\":0.7,"
+        /* Crystal sparkle: more sparkle events */
+        {"crystal",
+         "{\"algorithm\":11,\"variation\":3,\"activity\":0.65,\"repeats\":0.7,"
          "\"shape\":1.0,\"filter\":0.8,\"mix\":0.75,\"space\":0.75,"
          "\"time_div\":2,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.08,"
          "\"filter_res\":0.1,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
-
-        /* === SHOWCASE — pushing the boundaries === */
-        {"09-ethereal-event-horizon",
-         "{\"algorithm\":11,\"variation\":0,\"activity\":0.95,\"repeats\":0.9,"
-         "\"shape\":1.0,\"filter\":0.5,\"mix\":0.9,\"space\":0.95,"
-         "\"time_div\":4,\"pitch_mod_depth\":0.12,\"pitch_mod_rate\":0.03,"
-         "\"filter_res\":0.25,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
-
-        {"10-ethereal-hall-bright",
-         "{\"algorithm\":11,\"variation\":0,\"activity\":0.6,\"repeats\":0.7,"
-         "\"shape\":1.0,\"filter\":0.8,\"mix\":0.7,\"space\":0.65,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.06,"
-         "\"filter_res\":0.1,\"reverb_mode\":2,\"reverse\":0,\"hold\":0}"},
     };
 
     int num_presets = sizeof(presets) / sizeof(presets[0]);
-    printf("\nRendering %d presets (%ds input + %ds tail = %ds each)...\n\n", num_presets, input_sec, tail_sec, input_sec + tail_sec);
+
+    /* Render each preset with both inputs */
+    printf("\nRendering %d presets x 2 inputs (%ds + %ds tail)...\n\n", num_presets, input_sec, tail_sec);
 
     for (int i = 0; i < num_presets; i++) {
-        render_preset(api, &presets[i], input, input_frames, tail_frames, output_dir);
+        /* Piano version */
+        char piano_name[128];
+        snprintf(piano_name, sizeof(piano_name), "%02d-piano-%s", i + 1, presets[i].name);
+        preset_t piano_preset = { piano_name, presets[i].state };
+        render_preset(api, &piano_preset, piano_input, input_frames, tail_frames, output_dir);
+
+        /* Arp version */
+        char arp_name[128];
+        snprintf(arp_name, sizeof(arp_name), "%02d-arp-%s", i + 1, presets[i].name);
+        preset_t arp_preset = { arp_name, presets[i].state };
+        render_preset(api, &arp_preset, arp_input, input_frames, tail_frames, output_dir);
     }
 
-    printf("\nDone! %d WAV files saved to %s\n", num_presets + 1, output_dir);
+    printf("\nDone! %d WAV files saved to %s\n", num_presets * 2 + 2, output_dir);
 
-    free(input);
+    free(piano_input);
+    free(arp_input);
     return 0;
 }

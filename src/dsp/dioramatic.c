@@ -1455,10 +1455,17 @@ static void ethereal_tick(dioramatic_instance_t *inst) {
     }
 
     /* --- Layer 1: Micro-grain cloud (the "wash") ---
-       Short reverse grains that smear time. At low activity these are sparse
-       and delicate — you hear individual grains dissolving in reverb. At high
-       activity they merge into a continuous wash. */
-    int cloud_interval = (int)(2200.0f / (1.0f + activity * 12.0f));
+       Short reverse grains that smear time. At low activity these are very
+       sparse — you hear individual grains dissolving in reverb. At high
+       activity they merge into a continuous wash.
+       activity=0: one grain every ~1.5 sec. activity=1: every ~15ms. */
+    int cloud_interval;
+    if (activity < 0.1f) {
+        /* Ultra-sparse: 44100-66150 samples (1.0-1.5 sec between grains) */
+        cloud_interval = (int)(44100.0f + (0.1f - activity) * 220500.0f);
+    } else {
+        cloud_interval = (int)(4410.0f / (activity * 6.0f));
+    }
     cloud_interval = (int)((float)cloud_interval / cloud_density);
     if (cloud_interval < 64) cloud_interval = 64;
 
@@ -1483,9 +1490,9 @@ static void ethereal_tick(dioramatic_instance_t *inst) {
 
     /* --- Layer 2: Overtone drone (the "angels") ---
        Longer grains at harmonic intervals create sustained organ-like tones.
-       These read from RECENT audio and are kept short enough to stay within
-       the capture buffer's fresh data. */
-    int drone_interval = sub;
+       At low activity, drones are infrequent — mostly reverb with rare events.
+       At high activity, drones overlap continuously. */
+    int drone_interval = sub + (int)((1.0f - activity) * (float)sub * 3.0f);
     if (drone_interval < 441) drone_interval = 441;
 
     inst->ethereal_drone_counter++;

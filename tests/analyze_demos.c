@@ -105,16 +105,20 @@ int main(void) {
     const char *dir = "/Users/charlesvestal/Desktop/dioramatic-demos";
     const char *files[] = {
         "00-dry-input",
-        "01-ethereal-A-sweetspot",
-        "02-ethereal-sparse-delicate",
-        "03-ethereal-dense-enveloping",
-        "04-ethereal-warm-glow",
-        "05-ethereal-bright-crystal",
-        "06-ethereal-B-cloud-wash",
-        "07-ethereal-C-angel-drone",
-        "08-ethereal-D-crystal-sparkle",
-        "09-ethereal-event-horizon",
-        "10-ethereal-hall-bright",
+        "01-piano-sparse",
+        "01-arp-sparse",
+        "02-piano-delicate",
+        "02-arp-delicate",
+        "03-piano-sweetspot",
+        "03-arp-sweetspot",
+        "04-piano-dense",
+        "04-arp-dense",
+        "05-piano-warm",
+        "06-piano-bright",
+        "07-piano-angel",
+        "07-arp-angel",
+        "08-piano-crystal",
+        "08-arp-crystal",
     };
     int nfiles = sizeof(files)/sizeof(files[0]);
 
