@@ -371,62 +371,80 @@ int main(void) {
        voices of angels carrying music to a new dimension."
        Built from the user's favorites: Tunnel overtones, Mosaic reverse,
        ambient wash, Haze shimmer, and Blocks pitch-glitch for dynamism. */
-    /* Ethereal presets — each rendered with BOTH piano and arp input */
+    /* Your 6 favorites from the shimmer reverb version, rendered with
+       both piano stabs and arp input. These are the presets that sounded
+       good before — Haze diffuse, Haze shimmer, Tunnel overtones,
+       Blocks pitch-glitch, Ambient wash, Mosaic reverse. */
     preset_t presets[] = {
-        /* Truly sparse: reverb wash with a rare twinkle */
-        {"sparse",
-         "{\"algorithm\":11,\"variation\":3,\"activity\":0.05,\"repeats\":0.5,"
-         "\"shape\":1.0,\"filter\":0.7,\"mix\":0.85,\"space\":0.85,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.04,\"pitch_mod_rate\":0.04,"
-         "\"filter_res\":0.1,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+        /* #6 Haze A — granular diffuse wash */
+        {"haze-diffuse",
+         "{\"algorithm\":3,\"variation\":0,\"activity\":0.75,\"repeats\":0.6,"
+         "\"shape\":1.0,\"filter\":0.75,\"mix\":0.6,\"space\":0.45,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.12,\"pitch_mod_rate\":0.35,"
+         "\"filter_res\":0.2,\"reverb_mode\":2,\"reverse\":0,\"hold\":0}"},
 
-        /* Delicate: a few grains floating in reverb */
-        {"delicate",
-         "{\"algorithm\":11,\"variation\":0,\"activity\":0.2,\"repeats\":0.6,"
-         "\"shape\":1.0,\"filter\":0.7,\"mix\":0.8,\"space\":0.8,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.05,"
-         "\"filter_res\":0.1,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+        /* #7 Haze C — octave shimmer cloud */
+        {"haze-shimmer",
+         "{\"algorithm\":3,\"variation\":2,\"activity\":0.8,\"repeats\":0.65,"
+         "\"shape\":1.0,\"filter\":0.9,\"mix\":0.65,\"space\":0.55,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.3,"
+         "\"filter_res\":0.0,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
-        /* Sweet spot: the balanced default */
-        {"sweetspot",
-         "{\"algorithm\":11,\"variation\":0,\"activity\":0.55,\"repeats\":0.7,"
-         "\"shape\":1.0,\"filter\":0.7,\"mix\":0.75,\"space\":0.75,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.06,"
-         "\"filter_res\":0.15,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+        /* #8 Tunnel B — drone with overtone harmonics */
+        {"tunnel-overtones",
+         "{\"algorithm\":4,\"variation\":1,\"activity\":0.65,\"repeats\":0.75,"
+         "\"shape\":1.0,\"filter\":0.65,\"mix\":0.65,\"space\":0.5,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.1,\"pitch_mod_rate\":0.12,"
+         "\"filter_res\":0.25,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
-        /* Dense: full wall of shimmer */
-        {"dense",
-         "{\"algorithm\":11,\"variation\":0,\"activity\":0.9,\"repeats\":0.85,"
-         "\"shape\":1.0,\"filter\":0.65,\"mix\":0.85,\"space\":0.85,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.1,\"pitch_mod_rate\":0.05,"
+        /* #12 Blocks C — pitch-shifted glitch sparkles */
+        {"blocks-pitchglitch",
+         "{\"algorithm\":6,\"variation\":2,\"activity\":0.75,\"repeats\":0.6,"
+         "\"shape\":1.0,\"filter\":1.0,\"mix\":0.55,\"space\":0.3,"
+         "\"time_div\":0,\"pitch_mod_depth\":0.0,\"pitch_mod_rate\":0.3,"
+         "\"filter_res\":0.0,\"reverb_mode\":0,\"reverse\":0,\"hold\":0}"},
+
+        /* #19 Ambient wash — full Mosaic D through massive reverb */
+        {"ambient-wash",
+         "{\"algorithm\":0,\"variation\":3,\"activity\":0.85,\"repeats\":0.85,"
+         "\"shape\":1.0,\"filter\":0.55,\"mix\":0.8,\"space\":0.85,"
+         "\"time_div\":4,\"pitch_mod_depth\":0.1,\"pitch_mod_rate\":0.08,"
          "\"filter_res\":0.2,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
-        /* Warm glow: amber filtered */
-        {"warm",
-         "{\"algorithm\":11,\"variation\":0,\"activity\":0.5,\"repeats\":0.7,"
-         "\"shape\":1.0,\"filter\":0.4,\"mix\":0.8,\"space\":0.8,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.06,"
-         "\"filter_res\":0.3,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+        /* #20 Mosaic A reverse — time-smeared shimmer */
+        {"mosaic-reverse",
+         "{\"algorithm\":0,\"variation\":0,\"activity\":0.6,\"repeats\":0.7,"
+         "\"shape\":1.0,\"filter\":0.85,\"mix\":0.65,\"space\":0.45,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.12,\"pitch_mod_rate\":0.25,"
+         "\"filter_res\":0.1,\"reverb_mode\":2,\"reverse\":1,\"hold\":0}"},
 
-        /* Bright crystal: open and airy */
-        {"bright",
-         "{\"algorithm\":11,\"variation\":0,\"activity\":0.5,\"repeats\":0.7,"
-         "\"shape\":1.0,\"filter\":0.9,\"mix\":0.75,\"space\":0.8,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.06,"
+        /* NEW: Sparse haze — very low activity, mostly reverb tail with
+           occasional delicate grain events. The "sparkle" version. */
+        {"haze-sparse-sparkle",
+         "{\"algorithm\":3,\"variation\":2,\"activity\":0.15,\"repeats\":0.5,"
+         "\"shape\":1.0,\"filter\":0.8,\"mix\":0.8,\"space\":0.85,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.05,"
          "\"filter_res\":0.05,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
-        /* Angel drone: heavy overtone layer */
-        {"angel",
-         "{\"algorithm\":11,\"variation\":2,\"activity\":0.6,\"repeats\":0.8,"
-         "\"shape\":1.0,\"filter\":0.6,\"mix\":0.8,\"space\":0.85,"
+        /* NEW: Sparse tunnel — very low activity drone, mostly shimmer reverb */
+        {"tunnel-sparse",
+         "{\"algorithm\":4,\"variation\":1,\"activity\":0.2,\"repeats\":0.6,"
+         "\"shape\":1.0,\"filter\":0.7,\"mix\":0.75,\"space\":0.85,"
          "\"time_div\":4,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.04,"
-         "\"filter_res\":0.2,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+         "\"filter_res\":0.15,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
 
-        /* Crystal sparkle: more sparkle events */
-        {"crystal",
-         "{\"algorithm\":11,\"variation\":3,\"activity\":0.65,\"repeats\":0.7,"
-         "\"shape\":1.0,\"filter\":0.8,\"mix\":0.75,\"space\":0.75,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.08,"
+        /* NEW: Sparse mosaic reverse — very few grains, heavy reverb */
+        {"mosaic-reverse-sparse",
+         "{\"algorithm\":0,\"variation\":0,\"activity\":0.15,\"repeats\":0.55,"
+         "\"shape\":1.0,\"filter\":0.75,\"mix\":0.8,\"space\":0.85,"
+         "\"time_div\":2,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.05,"
+         "\"filter_res\":0.1,\"reverb_mode\":3,\"reverse\":1,\"hold\":0}"},
+
+        /* NEW: Ambient wash sparse — very delicate, open, floating */
+        {"ambient-sparse",
+         "{\"algorithm\":0,\"variation\":3,\"activity\":0.2,\"repeats\":0.6,"
+         "\"shape\":1.0,\"filter\":0.7,\"mix\":0.85,\"space\":0.9,"
+         "\"time_div\":4,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.04,"
          "\"filter_res\":0.1,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
     };
 

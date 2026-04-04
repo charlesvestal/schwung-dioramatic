@@ -1,8 +1,8 @@
 /*
  * Dioramatic Audio FX Plugin
  *
- * Granular effects processor with 12 algorithms.
- * Algorithms 0-8, 11: grain engine. Algorithms 9-10: multi-tap delay engine.
+ * Granular effects processor with 11 algorithms.
+ * Algorithms 0-8: grain engine. Algorithms 9-10: multi-tap delay engine.
  */
 
 #include <stdio.h>
@@ -133,11 +133,11 @@ typedef struct {
  * Algorithm and enum definitions
  * ============================================================================ */
 
-#define NUM_ALGORITHMS 12
+#define NUM_ALGORITHMS 11
 
 static const char *algorithm_names[NUM_ALGORITHMS] = {
     "Mosaic", "Seq", "Glide", "Haze", "Tunnel", "Strum",
-    "Blocks", "Interrupt", "Arp", "Pattern", "Warp", "Ethereal"
+    "Blocks", "Interrupt", "Arp", "Pattern", "Warp"
 };
 
 #define NUM_VARIATIONS 4
@@ -234,7 +234,7 @@ static const reverb_preset_t reverb_presets[4] = {
 
 typedef struct {
     /* Enum parameters (stored as int indices) */
-    int algorithm;       /* 0-11 */
+    int algorithm;       /* 0-10 */
     int variation;       /* 0-3 */
     int time_div;        /* 0-5 */
     int reverb_mode;     /* 0-3 */
@@ -308,11 +308,6 @@ typedef struct {
     int arp_step;
     int arp_step_timer;
     int arp_cycle;
-
-    /* Ethereal algorithm state */
-    int ethereal_cloud_counter;     /* micro-grain cloud trigger */
-    int ethereal_drone_counter;     /* drone/overtone trigger */
-    int ethereal_sparkle_counter;   /* occasional pitch-glitch sparkle */
 
     /* Delay engine (algorithms 9-10) */
     delay_engine_t delay;
@@ -571,11 +566,8 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         if (rev->shimmer_read_phase_a < 0) rev->shimmer_read_phase_a += (float)SHIMMER_BUF_SIZE;
     }
 
-    /* Shimmer level per mode — kept low to prevent runaway accumulation.
-       The shimmer is injected into feedback which ALREADY has high gain (0.72-0.95),
-       so even small shimmer amounts cascade into rich harmonic content over time.
-       Too much and it self-oscillates into distortion. */
-    static const float shimmer_amounts[4] = {0.03f, 0.04f, 0.06f, 0.08f};
+    /* Shimmer amount increases with reverb mode: subtle on Bright, heavy on Ambient */
+    static const float shimmer_amounts[4] = {0.08f, 0.12f, 0.18f, 0.30f};
     float shimmer_level = shimmer_amounts[mode];
 
     /* Apply feedback, damping, shimmer injection, and write back */
@@ -584,11 +576,9 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         /* One-pole lowpass damping */
         rev->lp_state[i] += p->damping * (fb - rev->lp_state[i]);
         fb = rev->lp_state[i];
-        /* Inject shimmer — the cascading crystalline harmonics */
+        /* Inject shimmer (octave-up) into the feedback path — this is what
+           creates the cascading harmonics building up over the reverb tail */
         fb += shimmer_out * shimmer_level;
-        /* Gentle limiter on feedback to prevent runaway buildup */
-        if (fb > 0.9f) fb = 0.9f;
-        else if (fb < -0.9f) fb = -0.9f;
         /* Write with input */
         rev->lines[i][rev->write_pos[i]] = diff_in + fb;
         rev->write_pos[i] = (rev->write_pos[i] + 1) & (FDN_MAX_DELAY - 1);
@@ -1409,7 +1399,7 @@ static void warp_configure_taps(dioramatic_instance_t *inst) {
 }
 
 static void delay_configure_taps_if_dirty(dioramatic_instance_t *inst) {
-    if (inst->algorithm != 9 && inst->algorithm != 10) return;
+    if (inst->algorithm < 9) return;
 
     /* Check if any relevant parameters changed */
     if (inst->algorithm != inst->delay_prev_algorithm ||
@@ -1435,130 +1425,6 @@ static void delay_configure_taps_if_dirty(dioramatic_instance_t *inst) {
 }
 
 /* ============================================================================
- * Algorithm 11: Ethereal - unified crystal/angel/smear effect
- * Layers micro-grain clouds, overtone drones, and crystal sparkles.
- * ============================================================================ */
-
-static void ethereal_tick(dioramatic_instance_t *inst) {
-    float activity = inst->activity;
-    float repeats = inst->repeats;
-    int sub = inst->subdivision_samples;
-    int wp = inst->capture.write_pos;
-
-    /* Variation balance multipliers */
-    float cloud_density = 1.0f, drone_amp = 1.0f, sparkle_prob = 1.0f;
-    switch (inst->variation) {
-        case 0: break; /* A: balanced */
-        case 1: cloud_density = 1.5f; sparkle_prob = 0.3f; break; /* B: cloud-heavy */
-        case 2: drone_amp = 1.5f; cloud_density = 0.6f; break; /* C: drone-heavy */
-        case 3: sparkle_prob = 3.0f; cloud_density = 0.5f; break; /* D: sparkle-heavy */
-    }
-
-    /* --- Layer 1: Micro-grain cloud (the "wash") ---
-       Short reverse grains that smear time into a continuous texture.
-       ONLY active above activity ~0.2 — below that, just sparkles + reverb.
-       This prevents the "ripple/trill" sound at sparse settings. */
-    if (activity > 0.15f) {
-        float cloud_activity = (activity - 0.15f) / 0.85f;  /* 0-1 rescaled */
-        int cloud_interval = (int)(4410.0f / (0.5f + cloud_activity * 5.5f));
-        cloud_interval = (int)((float)cloud_interval / cloud_density);
-        if (cloud_interval < 64) cloud_interval = 64;
-
-        inst->ethereal_cloud_counter++;
-        if (inst->ethereal_cloud_counter >= cloud_interval) {
-            inst->ethereal_cloud_counter = 0;
-            grain_t *g = find_free_grain(inst);
-            if (g) {
-                int grain_len = 441 + (int)(rng_float(&inst->rng_state) * 1323.0f);
-                int recent = (int)(8820.0f + rng_float(&inst->rng_state) * 8820.0f);
-                int start = (wp - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-                float speed = (rng_float(&inst->rng_state) < 0.8f) ? 1.0f : 2.0f;
-                init_grain_common(g, inst, start, grain_len, speed);
-                g->direction = -1;
-                g->amplitude = (0.2f + repeats * 0.3f) * cloud_activity;
-            }
-        }
-    }
-
-    /* --- Layer 2: Overtone drone (the "angels") ---
-       Longer grains at harmonic intervals create sustained organ-like tones.
-       Only active above activity ~0.3 — below that, just sparkles + reverb. */
-    if (activity > 0.25f) {
-        float drone_activity = (activity - 0.25f) / 0.75f;
-        int drone_interval = sub + (int)((1.0f - drone_activity) * (float)sub * 3.0f);
-        if (drone_interval < 441) drone_interval = 441;
-
-        inst->ethereal_drone_counter++;
-        if (inst->ethereal_drone_counter >= drone_interval) {
-            inst->ethereal_drone_counter = 0;
-            int start = (wp - (int)(rng_float(&inst->rng_state) * 4410.0f) - 441 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-
-            grain_t *g1 = find_free_grain(inst);
-            if (g1) {
-                int len1 = sub;
-                if (len1 > 44100) len1 = 44100;
-                if (len1 < 441) len1 = 441;
-                init_grain_common(g1, inst, start, len1, 1.0f);
-                g1->direction = 1;
-                g1->amplitude = (0.3f + repeats * 0.4f) * drone_amp * drone_activity;
-            }
-
-            grain_t *g2 = find_free_grain(inst);
-            if (g2) {
-                int len2 = sub / 2;
-                if (len2 > 22050) len2 = 22050;
-                if (len2 < 441) len2 = 441;
-                init_grain_common(g2, inst, start, len2, 2.0f);
-                g2->direction = 1;
-                g2->amplitude = (0.15f + repeats * 0.2f) * drone_amp * drone_activity;
-            }
-
-            if (drone_activity > 0.3f) {
-                grain_t *g3 = find_free_grain(inst);
-                if (g3) {
-                    int len3 = sub;
-                    if (len3 > 44100) len3 = 44100;
-                    if (len3 < 441) len3 = 441;
-                    init_grain_common(g3, inst, start, len3, 0.5f);
-                    g3->direction = 1;
-                    g3->amplitude = (0.1f + repeats * 0.15f) * drone_amp * drone_activity;
-                }
-            }
-        }
-    }
-
-    /* --- Layer 3: Crystal sparkles ---
-       Single, brief, BRIGHT events — like a bell struck in a cathedral.
-       Two octaves up (speed 4.0), very short (2-5ms), clear attack.
-       At low activity: the ONLY thing you hear besides reverb tail.
-       The reverb's shimmer feedback carries the sparkle into a long,
-       evolving crystalline tail. One sparkle can ring for seconds. */
-    inst->ethereal_sparkle_counter++;
-    /* Check interval: 200ms at low activity, 80ms at high */
-    int sparkle_check = (int)(8820.0f - activity * 5292.0f);
-    if (sparkle_check < 3528) sparkle_check = 3528;
-    if (inst->ethereal_sparkle_counter >= sparkle_check) {
-        inst->ethereal_sparkle_counter = 0;
-        /* Probability: 5% at activity=0 (≈one per 4 seconds),
-           up to 60% at activity=1 (≈one per 130ms) */
-        float prob = (0.05f + activity * 0.55f) * sparkle_prob;
-        if (rng_float(&inst->rng_state) < prob) {
-            grain_t *g = find_free_grain(inst);
-            if (g) {
-                /* Very short: 2-5ms. This creates a sharp "ting" not a ripple. */
-                int grain_len = 88 + (int)(rng_float(&inst->rng_state) * 132.0f);
-                /* Read from a recent transient/peak for maximum brightness */
-                int start = (wp - (int)(rng_float(&inst->rng_state) * 2205.0f) - 88 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-                /* Two octaves up — bell-like, crystalline */
-                init_grain_common(g, inst, start, grain_len, 4.0f);
-                g->amplitude = 0.5f + activity * 0.3f;
-                g->pan = (rng_float(&inst->rng_state) - 0.5f) * 0.8f;
-            }
-        }
-    }
-}
-
-/* ============================================================================
  * Algorithm tick dispatcher (called per sample)
  * ============================================================================ */
 
@@ -1573,7 +1439,6 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
         case 6: blocks_tick(inst); break;
         case 7: interrupt_tick(inst); break;
         case 8: arp_tick(inst); break;
-        case 11: ethereal_tick(inst); break;
         default: break;  /* algorithms 9-10 use delay engine, handled separately */
     }
 }
@@ -1745,7 +1610,7 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         /* 5. Accumulate wet signal — delay engine or grain engine */
         float wet_l = 0.0f, wet_r = 0.0f;
 
-        if (inst->algorithm == 9 || inst->algorithm == 10) {
+        if (inst->algorithm >= 9) {
             /* ---- Delay engine path (Pattern / Warp) ---- */
             delay_engine_t *de = &inst->delay;
 
@@ -2092,7 +1957,7 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
     } else if (strcmp(key, "chain_params") == 0) {
         return snprintf(buf, buf_len,
             "["
-            "{\"key\":\"algorithm\",\"name\":\"Algorithm\",\"type\":\"enum\",\"options\":[\"Mosaic\",\"Seq\",\"Glide\",\"Haze\",\"Tunnel\",\"Strum\",\"Blocks\",\"Interrupt\",\"Arp\",\"Pattern\",\"Warp\",\"Ethereal\"]},"
+            "{\"key\":\"algorithm\",\"name\":\"Algorithm\",\"type\":\"enum\",\"options\":[\"Mosaic\",\"Seq\",\"Glide\",\"Haze\",\"Tunnel\",\"Strum\",\"Blocks\",\"Interrupt\",\"Arp\",\"Pattern\",\"Warp\"]},"
             "{\"key\":\"variation\",\"name\":\"Variation\",\"type\":\"enum\",\"options\":[\"A\",\"B\",\"C\",\"D\"]},"
             "{\"key\":\"activity\",\"name\":\"Activity\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"repeats\",\"name\":\"Repeats\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
