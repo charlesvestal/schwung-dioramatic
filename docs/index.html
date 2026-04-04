@@ -88,7 +88,7 @@ if(len>this.SB/2)len=this.SB/2;
 let off=Math.floor(this.R()*(this.SB/2));
 g.rp=(this.SW-len-off+this.SB)&this.SBM;
 g.sp=2;g.dt=1+(this.R()-.5)*.012;g.ep=0;g.ei=1/len;
-g.am=.5+this.R()*.3;
+g.am=.25+this.R()*.15;
 let pan=(this.R()-.5)*this.scatter*.7;
 g.pl=Math.sqrt(.5-pan*.5);g.pr=Math.sqrt(.5+pan*.5);
 g.a=1;return}}
@@ -150,7 +150,8 @@ this.LLP[l]+=dmp*(f-this.LLP[l]);f=this.LLP[l];
 f+=((l<2)?sL:sR)*sLv;f+=fbd*.2;
 if(f>.7||f<-.7)f=Math.tanh(f)*.98;
 this.L[l][this.LP[l]]=df+f;this.LP[l]=(this.LP[l]+1)&NM}
-let rL=(tp[0]+tp[2])*.6+sL*this.shimmer*.4,rR=(tp[1]+tp[3])*.6+sR*this.shimmer*.4;
+let rL=(tp[0]+tp[2])*.6+Math.tanh(sL*2)*this.shimmer*.35;
+let rR=(tp[1]+tp[3])*.6+Math.tanh(sR*2)*this.shimmer*.35;
 this.STB[this.STP]=rR;let srd=(this.STP-353+1024)&1023;
 rR=this.STB[srd];this.STP=(this.STP+1)&1023;
 let hL=rL-this.SPL;this.SPL+=.15*hL;rL+=hL*.15;

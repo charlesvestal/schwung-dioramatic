@@ -123,7 +123,7 @@ static void shim_trigger(dioramatic_instance_t *inst, float grain_size_ms) {
         g->detune = 1.0f + (rngf(&inst->rng) - 0.5f) * 0.012f;  /* ±10 cents */
         g->env_phase = 0.0f;
         g->env_inc = 1.0f / (float)grain_len;
-        g->amp = 0.5f + rngf(&inst->rng) * 0.3f;
+        g->amp = 0.25f + rngf(&inst->rng) * 0.15f;  /* modest per-grain — many overlap */
         float pan = (rngf(&inst->rng) - 0.5f) * inst->scatter * 0.7f;
         g->pan_l = sqrtf(0.5f - pan * 0.5f);
         g->pan_r = sqrtf(0.5f + pan * 0.5f);
@@ -329,11 +329,11 @@ static void process(void *instance, int16_t *audio, int frames) {
         float rev_l = (taps[0] + taps[2]) * 0.6f;
         float rev_r = (taps[1] + taps[3]) * 0.6f;
 
-        /* Add shimmer grains directly to output — heard as distinct sparkles
-           on top of the reverb wash, not just buried inside the feedback.
-           This is the "trail of grains careening into space." */
-        rev_l += shim_l * inst->shimmer * 0.4f;
-        rev_r += shim_r * inst->shimmer * 0.4f;
+        /* Add shimmer grains directly to output — sparkle trail.
+           Tanh limits prevents blowout when many grains overlap. */
+        float shim_direct = inst->shimmer * 0.35f;
+        rev_l += tanhf(shim_l * 2.0f) * shim_direct;
+        rev_r += tanhf(shim_r * 2.0f) * shim_direct;
 
         /* Stereo decorrelation on right (~8ms) */
         inst->stereo_buf[inst->stereo_pos] = rev_r;
