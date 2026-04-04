@@ -1,8 +1,8 @@
 /*
  * Dioramatic Audio FX Plugin
  *
- * Granular effects processor with 11 algorithms.
- * Algorithms 0-8: grain engine. Algorithms 9-10: multi-tap delay engine.
+ * Granular effects processor with 12 algorithms.
+ * Algorithms 0-8, 11: grain engine. Algorithms 9-10: multi-tap delay engine.
  */
 
 #include <stdio.h>
@@ -133,11 +133,11 @@ typedef struct {
  * Algorithm and enum definitions
  * ============================================================================ */
 
-#define NUM_ALGORITHMS 11
+#define NUM_ALGORITHMS 12
 
 static const char *algorithm_names[NUM_ALGORITHMS] = {
     "Mosaic", "Seq", "Glide", "Haze", "Tunnel", "Strum",
-    "Blocks", "Interrupt", "Arp", "Pattern", "Warp"
+    "Blocks", "Interrupt", "Arp", "Pattern", "Warp", "Ethereal"
 };
 
 #define NUM_VARIATIONS 4
@@ -234,7 +234,7 @@ static const reverb_preset_t reverb_presets[4] = {
 
 typedef struct {
     /* Enum parameters (stored as int indices) */
-    int algorithm;       /* 0-10 */
+    int algorithm;       /* 0-11 */
     int variation;       /* 0-3 */
     int time_div;        /* 0-5 */
     int reverb_mode;     /* 0-3 */
@@ -308,6 +308,11 @@ typedef struct {
     int arp_step;
     int arp_step_timer;
     int arp_cycle;
+
+    /* Ethereal algorithm state */
+    int ethereal_cloud_counter;     /* micro-grain cloud trigger */
+    int ethereal_drone_counter;     /* drone/overtone trigger */
+    int ethereal_sparkle_counter;   /* occasional pitch-glitch sparkle */
 
     /* Delay engine (algorithms 9-10) */
     delay_engine_t delay;
@@ -1399,7 +1404,7 @@ static void warp_configure_taps(dioramatic_instance_t *inst) {
 }
 
 static void delay_configure_taps_if_dirty(dioramatic_instance_t *inst) {
-    if (inst->algorithm < 9) return;
+    if (inst->algorithm != 9 && inst->algorithm != 10) return;
 
     /* Check if any relevant parameters changed */
     if (inst->algorithm != inst->delay_prev_algorithm ||
@@ -1425,6 +1430,109 @@ static void delay_configure_taps_if_dirty(dioramatic_instance_t *inst) {
 }
 
 /* ============================================================================
+ * Algorithm 11: Ethereal - unified crystal/angel/smear effect
+ * Layers micro-grain clouds, overtone drones, and crystal sparkles.
+ * ============================================================================ */
+
+static void ethereal_tick(dioramatic_instance_t *inst) {
+    float activity = inst->activity;
+    float repeats = inst->repeats;
+    int sub = inst->subdivision_samples;
+    int wp = inst->capture.write_pos;
+
+    /* Variation balance multipliers */
+    float cloud_density = 1.0f, drone_amp = 1.0f, sparkle_prob = 1.0f;
+    switch (inst->variation) {
+        case 0: break; /* A: balanced */
+        case 1: cloud_density = 1.5f; sparkle_prob = 0.3f; break; /* B: cloud-heavy */
+        case 2: drone_amp = 1.5f; cloud_density = 0.6f; break; /* C: drone-heavy */
+        case 3: sparkle_prob = 2.5f; cloud_density = 0.7f; break; /* D: sparkle-heavy */
+    }
+
+    /* --- Layer 1: Micro-grain cloud (the "wash") --- */
+    int cloud_interval = (int)(882.0f / (1.0f + activity * 8.0f));
+    cloud_interval = (int)((float)cloud_interval / cloud_density);
+    if (cloud_interval < 64) cloud_interval = 64;
+
+    inst->ethereal_cloud_counter++;
+    if (inst->ethereal_cloud_counter >= cloud_interval) {
+        inst->ethereal_cloud_counter = 0;
+        grain_t *g = find_free_grain(inst);
+        if (g) {
+            /* Grain length: 441 to 2205 samples (10-50ms) */
+            int grain_len = 441 + (int)(rng_float(&inst->rng_state) * 1764.0f);
+            /* Start position: random within last 1 second */
+            int start = (wp - (int)(rng_float(&inst->rng_state) * (float)SAMPLE_RATE) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+            /* Speed: mostly 1.0, occasional 2.0 (octave up shimmer) */
+            float speed = (rng_float(&inst->rng_state) < 0.85f) ? 1.0f : 2.0f;
+            init_grain_common(g, inst, start, grain_len, speed);
+            g->direction = -1;  /* reverse for subtle time-smearing */
+            g->amplitude = 0.2f + repeats * 0.3f;
+        }
+    }
+
+    /* --- Layer 2: Overtone drone (the "angels") --- */
+    int drone_interval = sub * 2;
+    if (drone_interval < 1) drone_interval = 1;
+
+    inst->ethereal_drone_counter++;
+    if (inst->ethereal_drone_counter >= drone_interval) {
+        inst->ethereal_drone_counter = 0;
+        int start = (wp - sub + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+
+        /* Fundamental grain: speed 1.0 */
+        grain_t *g1 = find_free_grain(inst);
+        if (g1) {
+            int len1 = sub * 3;
+            if (len1 > CAPTURE_SAMPLES - 1) len1 = CAPTURE_SAMPLES - 1;
+            init_grain_common(g1, inst, start, len1, 1.0f);
+            g1->direction = 1;  /* forward — drones should be stable */
+            g1->amplitude = (0.3f + repeats * 0.4f) * drone_amp;
+        }
+
+        /* Octave up grain: speed 2.0 */
+        grain_t *g2 = find_free_grain(inst);
+        if (g2) {
+            int len2 = sub * 2;
+            if (len2 > CAPTURE_SAMPLES - 1) len2 = CAPTURE_SAMPLES - 1;
+            init_grain_common(g2, inst, start, len2, 2.0f);
+            g2->direction = 1;
+            g2->amplitude = (0.15f + repeats * 0.2f) * drone_amp;
+        }
+
+        /* Octave down grain: speed 0.5, only at higher activity */
+        if (activity > 0.5f) {
+            grain_t *g3 = find_free_grain(inst);
+            if (g3) {
+                int len3 = sub * 4;
+                if (len3 > CAPTURE_SAMPLES - 1) len3 = CAPTURE_SAMPLES - 1;
+                init_grain_common(g3, inst, start, len3, 0.5f);
+                g3->direction = 1;
+                g3->amplitude = (0.1f + repeats * 0.15f) * drone_amp;
+            }
+        }
+    }
+
+    /* --- Layer 3: Crystal sparkles (the "dynamism") --- */
+    inst->ethereal_sparkle_counter++;
+    if (inst->ethereal_sparkle_counter >= sub) {
+        inst->ethereal_sparkle_counter = 0;
+        float prob = (0.02f + activity * 0.08f) * sparkle_prob;
+        if (rng_float(&inst->rng_state) < prob) {
+            grain_t *g = find_free_grain(inst);
+            if (g) {
+                /* Very short grain: 220-660 samples (5-15ms) */
+                int grain_len = 220 + (int)(rng_float(&inst->rng_state) * 440.0f);
+                int start = (wp - (int)(rng_float(&inst->rng_state) * (float)sub) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                init_grain_common(g, inst, start, grain_len, 2.0f);
+                g->amplitude = 0.6f;
+                g->pan = (rng_float(&inst->rng_state) - 0.5f) * 0.8f;  /* wide: +/-0.4 */
+            }
+        }
+    }
+}
+
+/* ============================================================================
  * Algorithm tick dispatcher (called per sample)
  * ============================================================================ */
 
@@ -1439,6 +1547,7 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
         case 6: blocks_tick(inst); break;
         case 7: interrupt_tick(inst); break;
         case 8: arp_tick(inst); break;
+        case 11: ethereal_tick(inst); break;
         default: break;  /* algorithms 9-10 use delay engine, handled separately */
     }
 }
@@ -1610,7 +1719,7 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         /* 5. Accumulate wet signal — delay engine or grain engine */
         float wet_l = 0.0f, wet_r = 0.0f;
 
-        if (inst->algorithm >= 9) {
+        if (inst->algorithm == 9 || inst->algorithm == 10) {
             /* ---- Delay engine path (Pattern / Warp) ---- */
             delay_engine_t *de = &inst->delay;
 
@@ -1957,7 +2066,7 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
     } else if (strcmp(key, "chain_params") == 0) {
         return snprintf(buf, buf_len,
             "["
-            "{\"key\":\"algorithm\",\"name\":\"Algorithm\",\"type\":\"enum\",\"options\":[\"Mosaic\",\"Seq\",\"Glide\",\"Haze\",\"Tunnel\",\"Strum\",\"Blocks\",\"Interrupt\",\"Arp\",\"Pattern\",\"Warp\"]},"
+            "{\"key\":\"algorithm\",\"name\":\"Algorithm\",\"type\":\"enum\",\"options\":[\"Mosaic\",\"Seq\",\"Glide\",\"Haze\",\"Tunnel\",\"Strum\",\"Blocks\",\"Interrupt\",\"Arp\",\"Pattern\",\"Warp\",\"Ethereal\"]},"
             "{\"key\":\"variation\",\"name\":\"Variation\",\"type\":\"enum\",\"options\":[\"A\",\"B\",\"C\",\"D\"]},"
             "{\"key\":\"activity\",\"name\":\"Activity\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"repeats\",\"name\":\"Repeats\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"

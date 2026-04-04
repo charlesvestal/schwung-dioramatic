@@ -1,6 +1,6 @@
 {
   "parameters": {
-    "algorithm": "Effect algorithm (Mosaic, Seq, Glide, Haze, Tunnel, Strum, Blocks, Interrupt, Arp, Pattern, Warp)",
+    "algorithm": "Effect algorithm (Mosaic, Seq, Glide, Haze, Tunnel, Strum, Blocks, Interrupt, Arp, Pattern, Warp, Ethereal)",
     "variation": "Algorithm variation (A/B/C/D) — changes internal routing and behavior",
     "activity": "Algorithm-specific macro — generally more or less of what the effect does",
     "repeats": "Algorithm-specific macro — generally controls sustain and tail length",

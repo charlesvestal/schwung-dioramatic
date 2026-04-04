@@ -3,7 +3,7 @@
   "name": "Dioramatic",
   "abbrev": "DIO",
   "version": "0.1.0",
-  "description": "Granular effects processor — 11 algorithms with grain, glitch, and delay engines",
+  "description": "Granular effects processor — 12 algorithms with grain, glitch, and delay engines",
   "author": "charlesvestal",
   "license": "MIT",
   "dsp": "dioramatic.so",
@@ -18,7 +18,7 @@
           "params": [
             {"key": "algorithm", "label": "Algorithm", "type": "enum", "options": [
               "Mosaic", "Seq", "Glide", "Haze", "Tunnel", "Strum",
-              "Blocks", "Interrupt", "Arp", "Pattern", "Warp"
+              "Blocks", "Interrupt", "Arp", "Pattern", "Warp", "Ethereal"
             ], "default": "Mosaic"},
             {"key": "variation", "label": "Variation", "type": "enum", "options": ["A","B","C","D"], "default": "A"},
             {"key": "activity", "label": "Activity", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01, "unit": "%"},
