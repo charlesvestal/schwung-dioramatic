@@ -394,16 +394,23 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         block_rms += l * l + r * r;
     }
     block_rms = sqrtf(block_rms / (float)(frames * 2));
-    /* Fast attack, slow release — grains trail off after input stops */
+    /* Fast attack, release matched to reverb tail length.
+       Sustain+Space control how long the reverb rings, so grains should
+       trail off at the same rate — they're part of the same sound. */
+    float tail_factor = (inst->sustain + inst->space) * 0.5f;  /* 0=short, 1=long */
+    float fast_release = 0.005f - tail_factor * 0.004f;        /* 0.005 → 0.001 */
+    float slow_release = 0.002f - tail_factor * 0.0018f;       /* 0.002 → 0.0002 (~5s at max) */
+    if (fast_release < 0.0005f) fast_release = 0.0005f;
+    if (slow_release < 0.0001f) slow_release = 0.0001f;
+
     if (block_rms > inst->env_follower)
         inst->env_follower += 0.3f * (block_rms - inst->env_follower);
     else
-        inst->env_follower += 0.002f * (block_rms - inst->env_follower);  /* ~500ms release */
-    /* Even slower follower for trailing grains */
+        inst->env_follower += fast_release * (block_rms - inst->env_follower);
     if (block_rms > inst->env_follower_slow)
         inst->env_follower_slow += 0.1f * (block_rms - inst->env_follower_slow);
     else
-        inst->env_follower_slow += 0.0005f * (block_rms - inst->env_follower_slow); /* ~2s release */
+        inst->env_follower_slow += slow_release * (block_rms - inst->env_follower_slow);
 
     float env_gate = fminf(1.0f, inst->env_follower_slow * 5.0f);
 
