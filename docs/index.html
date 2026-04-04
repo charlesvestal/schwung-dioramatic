@@ -3,43 +3,38 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Dioramatic Playground</title>
+<title>Dioramatic</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, sans-serif; background: #0a0a1a; color: #c0c0d0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 20px; }
 h1 { font-size: 24px; font-weight: 300; letter-spacing: 4px; margin-bottom: 4px; color: #e0e0f0; }
 .subtitle { font-size: 12px; color: #606080; margin-bottom: 20px; letter-spacing: 2px; }
-
 .source-section { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; justify-content: center; }
 button { background: #1a1a3a; color: #a0a0d0; border: 1px solid #2a2a5a; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 12px; letter-spacing: 1px; }
 button:hover { background: #2a2a5a; }
 button.active { background: #3030a0; border-color: #5050c0; color: #fff; }
-
 .file-row { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; justify-content: center; flex-wrap: wrap; }
 .file-row label { background: #1a1a3a; color: #a0a0d0; border: 1px solid #2a2a5a; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 12px; letter-spacing: 1px; }
 .file-row label:hover { background: #2a2a5a; }
 .file-row input[type=file] { display: none; }
 #file-name { font-size: 11px; color: #606080; }
-
 .meter { width: 100%; max-width: 640px; height: 4px; background: #1a1a3a; border-radius: 2px; margin-bottom: 16px; overflow: hidden; }
 .meter-fill { height: 100%; background: linear-gradient(90deg, #3040a0, #6060c0, #a060c0); width: 0%; transition: width 50ms; }
-
 .controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; max-width: 640px; width: 100%; margin-bottom: 16px; }
 @media (max-width: 500px) { .controls { grid-template-columns: repeat(2, 1fr); } }
 .knob { background: #12122a; border-radius: 10px; padding: 14px 10px; text-align: center; border: 1px solid #1a1a3a; }
-.knob label { display: block; font-size: 10px; letter-spacing: 1.5px; color: #8080a0; margin-bottom: 6px; text-transform: uppercase; }
+.knob label { display: block; font-size: 10px; letter-spacing: 1.5px; color: #8080a0; margin-bottom: 2px; text-transform: uppercase; }
+.knob .hint { display: block; font-size: 8px; color: #404060; margin-bottom: 6px; letter-spacing: 0.5px; }
 .knob input[type=range] { width: 100%; -webkit-appearance: none; height: 6px; border-radius: 3px; background: #1a1a3a; outline: none; }
 .knob input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #6060c0; cursor: pointer; border: 2px solid #8080e0; }
 .knob .value { font-size: 16px; color: #a0a0d0; margin-top: 4px; font-variant-numeric: tabular-nums; }
-
 .status { font-size: 11px; color: #404060; margin-top: 4px; }
-.loop-indicator { font-size: 10px; color: #4040a0; margin-left: 8px; }
 </style>
 </head>
 <body>
 
 <h1>DIORAMATIC</h1>
-<div class="subtitle">GRANULAR SHIMMER PLAYGROUND</div>
+<div class="subtitle">GRANULAR SHIMMER</div>
 
 <div class="source-section">
   <button id="btn-mic" onclick="startMic()">Mic</button>
@@ -51,7 +46,7 @@ button.active { background: #3030a0; border-color: #5050c0; color: #fff; }
 </div>
 
 <div class="file-row">
-  <label for="file-input">Load WAV/MP3</label>
+  <label for="file-input">Load Audio File</label>
   <input type="file" id="file-input" accept="audio/*" onchange="loadFile(event)">
   <span id="file-name"></span>
 </div>
@@ -59,14 +54,14 @@ button.active { background: #3030a0; border-color: #5050c0; color: #fff; }
 <div class="meter"><div class="meter-fill" id="meter"></div></div>
 
 <div class="controls">
-  <div class="knob"><label>Grain</label><input type="range" id="k-grain" min="0" max="100" value="50"><div class="value" id="v-grain">50</div></div>
-  <div class="knob"><label>Shimmer</label><input type="range" id="k-shimmer" min="0" max="100" value="40"><div class="value" id="v-shimmer">40</div></div>
-  <div class="knob"><label>Reverb</label><input type="range" id="k-reverb" min="0" max="100" value="60"><div class="value" id="v-reverb">60</div></div>
-  <div class="knob"><label>Glitch</label><input type="range" id="k-glitch" min="0" max="100" value="20"><div class="value" id="v-glitch">20</div></div>
-  <div class="knob"><label>Tone</label><input type="range" id="k-tone" min="0" max="100" value="70"><div class="value" id="v-tone">70</div></div>
-  <div class="knob"><label>Depth</label><input type="range" id="k-depth" min="0" max="100" value="60"><div class="value" id="v-depth">60</div></div>
-  <div class="knob"><label>Sustain</label><input type="range" id="k-sustain" min="0" max="100" value="30"><div class="value" id="v-sustain">30</div></div>
-  <div class="knob"><label>Mix</label><input type="range" id="k-mix" min="0" max="100" value="65"><div class="value" id="v-mix">65</div></div>
+  <div class="knob"><label>Space</label><span class="hint">room &rarr; cathedral</span><input type="range" id="k-space" min="0" max="100" value="55"><div class="value" id="v-space">55</div></div>
+  <div class="knob"><label>Shimmer</label><span class="hint">natural &rarr; crystal</span><input type="range" id="k-shimmer" min="0" max="100" value="35"><div class="value" id="v-shimmer">35</div></div>
+  <div class="knob"><label>Smear</label><span class="hint">sharp &rarr; dissolved</span><input type="range" id="k-smear" min="0" max="100" value="40"><div class="value" id="v-smear">40</div></div>
+  <div class="knob"><label>Warmth</label><span class="hint">airy &rarr; amber</span><input type="range" id="k-warmth" min="0" max="100" value="45"><div class="value" id="v-warmth">45</div></div>
+  <div class="knob"><label>Drift</label><span class="hint">still &rarr; breathing</span><input type="range" id="k-drift" min="0" max="100" value="35"><div class="value" id="v-drift">35</div></div>
+  <div class="knob"><label>Sustain</label><span class="hint">short &rarr; infinite</span><input type="range" id="k-sustain" min="0" max="100" value="50"><div class="value" id="v-sustain">50</div></div>
+  <div class="knob"><label>Scatter</label><span class="hint">focused &rarr; wide</span><input type="range" id="k-scatter" min="0" max="100" value="40"><div class="value" id="v-scatter">40</div></div>
+  <div class="knob"><label>Mix</label><span class="hint">dry &rarr; wet</span><input type="range" id="k-mix" min="0" max="100" value="60"><div class="value" id="v-mix">60</div></div>
 </div>
 
 <div class="status" id="status">Click a source to begin</div>
@@ -77,165 +72,305 @@ class DioramaticProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.sr = sampleRate;
-    this.grain = 0.5; this.shimmer = 0.4; this.reverb = 0.6; this.glitch = 0.2;
-    this.tone = 0.7; this.depth = 0.6; this.sustain = 0.3; this.mix = 0.65;
+
+    // Musical params (0-1)
+    this.space = 0.55; this.shimmer = 0.35; this.smear = 0.4; this.warmth = 0.45;
+    this.drift = 0.35; this.sustain = 0.5; this.scatter = 0.4; this.mix = 0.6;
+
+    // Capture buffer
     this.capSize = Math.floor(this.sr * 2);
     this.capL = new Float32Array(this.capSize);
     this.capR = new Float32Array(this.capSize);
     this.capPos = 0;
-    this.maxGrains = 24;
+
+    // Grains
+    this.maxGrains = 32;
     this.grains = [];
     for (let i = 0; i < this.maxGrains; i++) {
-      this.grains.push({active:false,start:0,len:0,pos:0,speed:1,amp:0,envInc:0,envPhase:0,pan:0,detune:1});
+      this.grains.push({active:false,start:0,len:0,pos:0,speed:1,amp:0,
+        envInc:0,envPhase:0,panL:0.5,panR:0.5,detune:1});
     }
-    this.grainTimer = 0;
-    this.sparkleTimer = 0;
-    this.smearTimer = 0;
+    this.cloudTimer = 0;
+    this.shimmerGrainTimer = 0;
+
+    // FDN Reverb
     this.fdnSize = 8192;
-    this.fdnLines = [new Float32Array(this.fdnSize),new Float32Array(this.fdnSize),new Float32Array(this.fdnSize),new Float32Array(this.fdnSize)];
+    this.fdnLines = [new Float32Array(this.fdnSize),new Float32Array(this.fdnSize),
+                     new Float32Array(this.fdnSize),new Float32Array(this.fdnSize)];
     this.fdnPos = [0,0,0,0];
-    this.fdnLengths = [3547,4177,4831,5557];
     this.fdnLP = [0,0,0,0];
     this.fdnMod = [0,0,0,0];
+
+    // Allpass diffusers
     this.apLens = [241,173,419,313];
     this.apBufs = this.apLens.map(l => new Float32Array(l));
     this.apPos = [0,0,0,0];
+
+    // Shimmer pitch shift buffer
     this.shimBuf = new Float32Array(4096);
     this.shimWr = 0; this.shimRd = 0;
+
+    // SVF filter
     this.svfL = {ic1:0,ic2:0}; this.svfR = {ic1:0,ic2:0};
+
+    // Pitch mod LFO
+    this.lfoPhase = 0;
+
+    // RNG
     this.rngState = 12345;
     this.peakLevel = 0; this.meterCounter = 0;
+
     this.port.onmessage = (e) => {
       const p = e.data;
-      if(p.grain!==undefined) this.grain=p.grain;
-      if(p.shimmer!==undefined) this.shimmer=p.shimmer;
-      if(p.reverb!==undefined) this.reverb=p.reverb;
-      if(p.glitch!==undefined) this.glitch=p.glitch;
-      if(p.tone!==undefined) this.tone=p.tone;
-      if(p.depth!==undefined) this.depth=p.depth;
-      if(p.sustain!==undefined) this.sustain=p.sustain;
-      if(p.mix!==undefined) this.mix=p.mix;
+      for (const k of ['space','shimmer','smear','warmth','drift','sustain','scatter','mix']) {
+        if (p[k] !== undefined) this[k] = p[k];
+      }
     };
   }
-  rng(){this.rngState=(this.rngState*1664525+1013904223)&0xFFFFFFFF;return(this.rngState>>>8)/16777216;}
-  hann(p){return 0.5*(1-Math.cos(2*Math.PI*p));}
-  triggerGrain(speed,amp,lenMs){
-    for(let g of this.grains){if(!g.active){
-      const len=Math.floor(this.sr*lenMs/1000);
-      const recent=Math.floor(this.sr*0.1+this.rng()*this.sr*0.3);
-      g.active=true;g.start=(this.capPos-recent+this.capSize)%this.capSize;
-      g.len=len;g.pos=0;g.speed=speed;g.amp=amp;g.envPhase=0;g.envInc=1/len;
-      g.pan=(this.rng()-0.5)*0.6;g.detune=1+(this.rng()-0.5)*0.009;return;
-    }}
-  }
-  svfLP(s,input,a1,a2,a3){
-    const v3=input-s.ic2;const v1=a1*s.ic1+a2*v3;const v2=s.ic2+a2*s.ic1+a3*v3;
-    s.ic1=2*v1-s.ic1;s.ic2=2*v2-s.ic2;return v2;
-  }
-  process(inputs,outputs){
-    const input=inputs[0];const output=outputs[0];
-    if(!input||!input[0])return true;
-    const inL=input[0];const inR=input[1]||input[0];
-    const outL=output[0];const outR=output[1]||output[0];
-    const N=outL.length;
-    const cutHz=80*Math.pow(225,this.tone);
-    const svfG=Math.tan(Math.PI*Math.min(cutHz,20000)/this.sr);
-    const svfK=2-2*0.1*0.95;
-    const svfA1=1/(1+svfG*(svfG+svfK));const svfA2=svfG*svfA1;const svfA3=svfG*svfA2;
-    const revSend=this.reverb;
-    const feedback=Math.min(0.97,0.7+this.depth*0.2+this.sustain*0.08);
-    const damping=0.3+(1-this.tone)*0.4;
-    const shimAmt=this.shimmer*0.08+this.sustain*0.15;
-    const grainInterval=Math.max(64,Math.floor(4410/(0.5+this.grain*5.5)));
-    const sparkleCheck=4410;
-    for(let i=0;i<N;i++){
-      const dryL=inL[i]*0.7;const dryR=inR[i]*0.7;
-      this.capL[this.capPos]=dryL;this.capR[this.capPos]=dryR;
-      this.capPos=(this.capPos+1)%this.capSize;
-      if(this.grain>0.05){this.grainTimer++;
-        if(this.grainTimer>=grainInterval){this.grainTimer=0;
-          const sp=this.rng()<0.8?1:2;this.triggerGrain(sp,0.3+this.depth*0.4,10+this.rng()*30);
-          if(this.rng()<0.3){this.triggerGrain(2,0.15+this.depth*0.15,10+this.rng()*20);}
-        }
+
+  rng() { this.rngState = (this.rngState * 1664525 + 1013904223) & 0xFFFFFFFF; return (this.rngState >>> 8) / 16777216; }
+  hann(p) { return 0.5 * (1 - Math.cos(2 * Math.PI * p)); }
+
+  triggerGrain(speed, amp, lenMs, panWidth) {
+    for (let g of this.grains) {
+      if (!g.active) {
+        const len = Math.max(44, Math.floor(this.sr * lenMs / 1000));
+        const recent = Math.floor(this.sr * 0.05 + this.rng() * this.sr * 0.4);
+        g.active = true;
+        g.start = (this.capPos - recent + this.capSize) % this.capSize;
+        g.len = len; g.pos = 0; g.speed = speed; g.amp = amp;
+        g.envPhase = 0; g.envInc = 1 / len;
+        g.detune = 1 + (this.rng() - 0.5) * 0.009;
+        // Pan with scatter control
+        const panAngle = (this.rng() - 0.5) * panWidth * Math.PI * 0.5;
+        g.panL = Math.cos(panAngle + Math.PI * 0.25);
+        g.panR = Math.sin(panAngle + Math.PI * 0.25);
+        return;
       }
-      this.sparkleTimer++;
-      if(this.sparkleTimer>=sparkleCheck){this.sparkleTimer=0;
-        const prob=0.03+this.glitch*0.4;
-        if(this.rng()<prob){this.triggerGrain(4,0.4+this.glitch*0.4,2+this.rng()*5);}
-      }
-      if(this.sustain>0.02){this.smearTimer++;
-        const smearInt=Math.max(2000,Math.floor(22050/(0.3+this.sustain*3)));
-        if(this.smearTimer>=smearInt){this.smearTimer=0;
-          const smLen=100+this.rng()*200+this.sustain*200;
-          this.triggerGrain(2,0.15+this.sustain*0.3,smLen);
-          if(this.sustain>0.3){this.triggerGrain(1,0.1+this.sustain*0.2,smLen*1.5);}
-          if(this.sustain>0.6){this.triggerGrain(0.5,0.08+this.sustain*0.12,smLen*2);}
-        }
-      }
-      let wetL=0,wetR=0;
-      for(let g of this.grains){if(!g.active)continue;
-        const idx=Math.floor(g.start+g.pos);const frac=(g.start+g.pos)-idx;
-        const i0=((idx%this.capSize)+this.capSize)%this.capSize;const i1=(i0+1)%this.capSize;
-        const sL=this.capL[i0]*(1-frac)+this.capL[i1]*frac;
-        const sR=this.capR[i0]*(1-frac)+this.capR[i1]*frac;
-        const env=this.hann(g.envPhase);
-        const pa=(g.pan+1)*Math.PI*0.25;
-        const a=g.amp*env;wetL+=sL*a*Math.cos(pa);wetR+=sR*a*Math.sin(pa);
-        g.pos+=g.speed*g.detune;g.envPhase+=g.envInc;if(g.envPhase>=1)g.active=false;
-      }
-      wetL=this.svfLP(this.svfL,wetL,svfA1,svfA2,svfA3);
-      wetR=this.svfLP(this.svfR,wetR,svfA1,svfA2,svfA3);
-      if(revSend>0.01){
-        let diff=(wetL+wetR)*0.5*revSend;
-        for(let a=0;a<4;a++){
-          const del=this.apBufs[a][this.apPos[a]];const ao=del-0.5*diff;
-          this.apBufs[a][this.apPos[a]]=diff+0.5*ao;diff=ao;
-          this.apPos[a]=(this.apPos[a]+1)%this.apLens[a];
-        }
-        const modR=[0.37,0.47,0.31,0.53];let taps=[0,0,0,0];
-        for(let l=0;l<4;l++){
-          const mo=Math.sin(2*Math.PI*this.fdnMod[l])*12;
-          let d=this.fdnLengths[l]+Math.floor(mo);
-          if(d<1)d=1;if(d>=this.fdnSize)d=this.fdnSize-1;
-          taps[l]=this.fdnLines[l][(this.fdnPos[l]-d+this.fdnSize)&(this.fdnSize-1)];
-          this.fdnMod[l]+=modR[l]/this.sr;if(this.fdnMod[l]>=1)this.fdnMod[l]-=1;
-        }
-        const mx=[0.5*(taps[0]+taps[1]+taps[2]+taps[3]),0.5*(taps[0]-taps[1]+taps[2]-taps[3]),
-                  0.5*(taps[0]+taps[1]-taps[2]-taps[3]),0.5*(taps[0]-taps[1]-taps[2]+taps[3])];
-        this.shimBuf[this.shimWr]=(mx[0]+mx[1]+mx[2]+mx[3])*0.25;
-        this.shimWr=(this.shimWr+1)&4095;
-        const gs=1024;const rdA=Math.floor(this.shimRd);const frA=this.shimRd-rdA;
-        const sA=this.shimBuf[rdA&4095]*(1-frA)+this.shimBuf[(rdA+1)&4095]*frA;
-        const eA=0.5*(1-Math.cos(2*Math.PI*((this.shimRd/gs)%1)));
-        const rdB=this.shimRd+gs/2;const rdBi=Math.floor(rdB);const frB=rdB-rdBi;
-        const sB=this.shimBuf[rdBi&4095]*(1-frB)+this.shimBuf[(rdBi+1)&4095]*frB;
-        const eB=0.5*(1-Math.cos(2*Math.PI*((rdB/gs)%1)));
-        const shimOut=sA*eA+sB*eB;this.shimRd+=2;
-        const sd=this.shimWr-this.shimRd;if(sd<0||sd>4096-gs){this.shimRd=this.shimWr-2048;if(this.shimRd<0)this.shimRd+=4096;}
-        for(let l=0;l<4;l++){
-          let fb=mx[l]*feedback;this.fdnLP[l]+=damping*(fb-this.fdnLP[l]);
-          fb=this.fdnLP[l]+shimOut*shimAmt;
-          fb=Math.tanh(fb*1.2)*0.85;
-          this.fdnLines[l][this.fdnPos[l]]=diff+fb;
-          this.fdnPos[l]=(this.fdnPos[l]+1)&(this.fdnSize-1);
-        }
-        wetL+=(taps[0]+taps[2])*0.45*revSend;wetR+=(taps[1]+taps[3])*0.45*revSend;
-      }
-      let oL=dryL*(1-this.mix)+wetL*this.mix;let oR=dryR*(1-this.mix)+wetR*this.mix;
-      oL=Math.tanh(oL*1.5)*0.667;oR=Math.tanh(oR*1.5)*0.667;
-      outL[i]=oL;outR[i]=oR;
-      const lvl=Math.abs(oL)>Math.abs(oR)?Math.abs(oL):Math.abs(oR);
-      if(lvl>this.peakLevel)this.peakLevel=lvl;
     }
-    this.meterCounter+=N;
-    if(this.meterCounter>=2048){this.meterCounter=0;this.port.postMessage({peak:this.peakLevel});this.peakLevel=0;}
+  }
+
+  process(inputs, outputs) {
+    const input = inputs[0]; const output = outputs[0];
+    if (!input || !input[0]) return true;
+    const inL = input[0]; const inR = input[1] || input[0];
+    const outL = output[0]; const outR = output[1] || output[0];
+    const N = outL.length;
+
+    // === DERIVE DSP PARAMS FROM MUSICAL KNOBS ===
+
+    // Space -> reverb delay line selection + send amount
+    // 0=small room, 1=infinite cathedral
+    const revSend = 0.2 + this.space * 0.75;
+    const fdnLengths = [
+      Math.floor(1087 + this.space * 2500),
+      Math.floor(1283 + this.space * 2900),
+      Math.floor(1447 + this.space * 3400),
+      Math.floor(1663 + this.space * 3900)
+    ];
+
+    // Shimmer -> octave-up feedback in reverb + bright grain rate
+    // 0=natural reverb, 1=cascading crystal harmonics
+    const shimFeedback = this.shimmer * 0.12;
+    const shimGrainRate = this.shimmer > 0.1 ? Math.floor(8000 / (0.3 + this.shimmer * 4)) : 999999;
+
+    // Smear -> grain cloud density + grain length
+    // 0=no grains (sharp attacks), 1=dense cloud (everything dissolves)
+    const cloudRate = this.smear > 0.05 ? Math.max(64, Math.floor(6000 / (0.2 + this.smear * 6))) : 999999;
+    const cloudLenMs = 15 + this.smear * 80;
+
+    // Warmth -> filter cutoff (inverted: more warmth = lower cutoff)
+    // 0=bright/airy, 1=dark/amber
+    const cutHz = Math.min(20000, 200 * Math.pow(100, 1 - this.warmth));
+
+    // Drift -> pitch mod depth + reverb line modulation depth
+    // 0=still/frozen, 1=constantly evolving
+    const pitchModDepth = this.drift * 0.15;
+    const pitchModRate = 0.05 + this.drift * 0.4;
+    const revModDepth = 4 + this.drift * 20;
+
+    // Sustain -> reverb feedback + grain overlap length
+    // 0=short, 1=near-infinite
+    const revFeedback = Math.min(0.97, 0.65 + this.sustain * 0.32);
+    const sustainGrainLen = 50 + this.sustain * 350;
+
+    // Scatter -> stereo width of grains
+    // 0=mono/focused, 1=wide stereo field
+    const panWidth = this.scatter;
+
+    // Reverb damping: derived from warmth (warmer = more damping)
+    const damping = 0.15 + this.warmth * 0.5;
+
+    // SVF coefficients
+    const svfG = Math.tan(Math.PI * Math.min(cutHz, 20000) / this.sr);
+    const svfK = 2 - 0.19;
+    const svfA1 = 1 / (1 + svfG * (svfG + svfK));
+    const svfA2 = svfG * svfA1;
+    const svfA3 = svfG * svfA2;
+
+    // LFO
+    const lfoInc = pitchModRate / this.sr;
+
+    for (let i = 0; i < N; i++) {
+      const dryL = inL[i] * 0.7;
+      const dryR = inR[i] * 0.7;
+
+      // Capture buffer
+      this.capL[this.capPos] = dryL;
+      this.capR[this.capPos] = dryR;
+      this.capPos = (this.capPos + 1) % this.capSize;
+
+      // Pitch mod LFO
+      const lfoVal = Math.sin(2 * Math.PI * this.lfoPhase);
+      const pitchMod = Math.pow(2, pitchModDepth * lfoVal * (100 / 1200));
+      this.lfoPhase += lfoInc;
+      if (this.lfoPhase >= 1) this.lfoPhase -= 1;
+
+      // === GRAIN TRIGGERS ===
+
+      // Cloud grains (Smear): time-blurring wash
+      this.cloudTimer++;
+      if (this.cloudTimer >= cloudRate) {
+        this.cloudTimer = 0;
+        const sp = this.rng() < 0.85 ? 1 : 2;
+        this.triggerGrain(sp, 0.2 + this.sustain * 0.3, cloudLenMs + this.rng() * 20, panWidth);
+      }
+
+      // Shimmer grains: octave-up sparkle texture (driven by Shimmer knob)
+      this.shimmerGrainTimer++;
+      if (this.shimmerGrainTimer >= shimGrainRate) {
+        this.shimmerGrainTimer = 0;
+        // Long sustained octave-up grains — the "smeared sparkle"
+        this.triggerGrain(2, 0.12 + this.shimmer * 0.25, sustainGrainLen + this.rng() * 100, panWidth * 0.8);
+        // Occasional tiny bright ping
+        if (this.rng() < 0.15 + this.shimmer * 0.3) {
+          this.triggerGrain(4, 0.2 + this.shimmer * 0.2, 2 + this.rng() * 5, panWidth);
+        }
+      }
+
+      // === GRAIN PLAYBACK ===
+      let wetL = 0, wetR = 0;
+      for (let g of this.grains) {
+        if (!g.active) continue;
+        const idx = Math.floor(g.start + g.pos);
+        const frac = (g.start + g.pos) - idx;
+        const i0 = ((idx % this.capSize) + this.capSize) % this.capSize;
+        const i1 = (i0 + 1) % this.capSize;
+        const sL = this.capL[i0] * (1 - frac) + this.capL[i1] * frac;
+        const sR = this.capR[i0] * (1 - frac) + this.capR[i1] * frac;
+        const env = this.hann(g.envPhase);
+        const a = g.amp * env;
+        wetL += sL * a * g.panL;
+        wetR += sR * a * g.panR;
+        g.pos += g.speed * g.detune * pitchMod;
+        g.envPhase += g.envInc;
+        if (g.envPhase >= 1) g.active = false;
+      }
+
+      // === SVF FILTER ===
+      let v3 = wetL - this.svfL.ic2;
+      let v1 = svfA1 * this.svfL.ic1 + svfA2 * v3;
+      let v2 = this.svfL.ic2 + svfA2 * this.svfL.ic1 + svfA3 * v3;
+      this.svfL.ic1 = 2 * v1 - this.svfL.ic1;
+      this.svfL.ic2 = 2 * v2 - this.svfL.ic2;
+      wetL = v2;
+
+      v3 = wetR - this.svfR.ic2;
+      v1 = svfA1 * this.svfR.ic1 + svfA2 * v3;
+      v2 = this.svfR.ic2 + svfA2 * this.svfR.ic1 + svfA3 * v3;
+      this.svfR.ic1 = 2 * v1 - this.svfR.ic1;
+      this.svfR.ic2 = 2 * v2 - this.svfR.ic2;
+      wetR = v2;
+
+      // === FDN REVERB ===
+      if (revSend > 0.01) {
+        // Input diffusion
+        let diff = (wetL + wetR) * 0.5 * revSend;
+        for (let a = 0; a < 4; a++) {
+          const del = this.apBufs[a][this.apPos[a]];
+          const ao = del - 0.5 * diff;
+          this.apBufs[a][this.apPos[a]] = diff + 0.5 * ao;
+          diff = ao;
+          this.apPos[a] = (this.apPos[a] + 1) % this.apLens[a];
+        }
+
+        // Modulated delay line read
+        const modRates = [0.37, 0.47, 0.31, 0.53];
+        let taps = [0, 0, 0, 0];
+        for (let l = 0; l < 4; l++) {
+          const mo = Math.sin(2 * Math.PI * this.fdnMod[l]) * revModDepth;
+          let d = fdnLengths[l] + Math.floor(mo);
+          if (d < 1) d = 1; if (d >= this.fdnSize) d = this.fdnSize - 1;
+          taps[l] = this.fdnLines[l][(this.fdnPos[l] - d + this.fdnSize) & (this.fdnSize - 1)];
+          this.fdnMod[l] += modRates[l] / this.sr;
+          if (this.fdnMod[l] >= 1) this.fdnMod[l] -= 1;
+        }
+
+        // Hadamard
+        const mx = [
+          0.5 * (taps[0] + taps[1] + taps[2] + taps[3]),
+          0.5 * (taps[0] - taps[1] + taps[2] - taps[3]),
+          0.5 * (taps[0] + taps[1] - taps[2] - taps[3]),
+          0.5 * (taps[0] - taps[1] - taps[2] + taps[3])
+        ];
+
+        // Shimmer pitch shift
+        this.shimBuf[this.shimWr] = (mx[0] + mx[1] + mx[2] + mx[3]) * 0.25;
+        this.shimWr = (this.shimWr + 1) & 4095;
+        const gs = 1024;
+        const rdA = Math.floor(this.shimRd); const frA = this.shimRd - rdA;
+        const sA = this.shimBuf[rdA & 4095] * (1 - frA) + this.shimBuf[(rdA + 1) & 4095] * frA;
+        const eA = 0.5 * (1 - Math.cos(2 * Math.PI * ((this.shimRd / gs) % 1)));
+        const rdB = this.shimRd + gs / 2;
+        const rdBi = Math.floor(rdB); const frB = rdB - rdBi;
+        const sB = this.shimBuf[rdBi & 4095] * (1 - frB) + this.shimBuf[(rdBi + 1) & 4095] * frB;
+        const eB = 0.5 * (1 - Math.cos(2 * Math.PI * ((rdB / gs) % 1)));
+        const shimOut = sA * eA + sB * eB;
+        this.shimRd += 2;
+        const sd = this.shimWr - this.shimRd;
+        if (sd < 0 || sd > 4096 - gs) {
+          this.shimRd = this.shimWr - 2048;
+          if (this.shimRd < 0) this.shimRd += 4096;
+        }
+
+        // Feedback with shimmer + damping
+        for (let l = 0; l < 4; l++) {
+          let fb = mx[l] * revFeedback;
+          this.fdnLP[l] += damping * (fb - this.fdnLP[l]);
+          fb = this.fdnLP[l] + shimOut * shimFeedback;
+          fb = Math.tanh(fb * 1.2) * 0.85;
+          this.fdnLines[l][this.fdnPos[l]] = diff + fb;
+          this.fdnPos[l] = (this.fdnPos[l] + 1) & (this.fdnSize - 1);
+        }
+
+        wetL += (taps[0] + taps[2]) * 0.45 * revSend;
+        wetR += (taps[1] + taps[3]) * 0.45 * revSend;
+      }
+
+      // Mix + soft clip
+      let oL = dryL * (1 - this.mix) + wetL * this.mix;
+      let oR = dryR * (1 - this.mix) + wetR * this.mix;
+      oL = Math.tanh(oL * 1.5) * 0.667;
+      oR = Math.tanh(oR * 1.5) * 0.667;
+      outL[i] = oL; outR[i] = oR;
+
+      const lvl = Math.abs(oL) > Math.abs(oR) ? Math.abs(oL) : Math.abs(oR);
+      if (lvl > this.peakLevel) this.peakLevel = lvl;
+    }
+
+    this.meterCounter += N;
+    if (this.meterCounter >= 2048) {
+      this.meterCounter = 0;
+      this.port.postMessage({ peak: this.peakLevel });
+      this.peakLevel = 0;
+    }
     return true;
   }
 }
-registerProcessor('dioramatic-processor',DioramaticProcessor);
+registerProcessor('dioramatic-processor', DioramaticProcessor);
 `;
 
-let ctx, workletNode, sourceNode, fileBuffer = null;
+let ctx, workletNode, sourceNode;
 
 async function initAudio() {
   if (ctx) { await ctx.resume(); return; }
@@ -251,8 +386,7 @@ async function initAudio() {
     el.addEventListener('input', () => {
       const id = el.id.replace('k-', '');
       document.getElementById('v-' + id).textContent = el.value;
-      const map = {grain:'grain',shimmer:'shimmer',reverb:'reverb',glitch:'glitch',tone:'tone',depth:'depth',sustain:'sustain',mix:'mix'};
-      const msg = {}; msg[map[id]] = el.value / 100;
+      const msg = {}; msg[id] = el.value / 100;
       workletNode.port.postMessage(msg);
     });
     el.dispatchEvent(new Event('input'));
@@ -260,88 +394,62 @@ async function initAudio() {
 }
 
 function disconnectSource() {
-  if (sourceNode) { try { sourceNode.stop(); } catch(e) {} try { sourceNode.disconnect(); } catch(e) {} sourceNode = null; }
+  if (sourceNode) { try{sourceNode.stop();}catch(e){} try{sourceNode.disconnect();}catch(e){} sourceNode=null; }
 }
-
 function setActive(id) {
   document.querySelectorAll('.source-section button').forEach(b => b.classList.remove('active'));
   if (id) document.getElementById(id).classList.add('active');
 }
-
 async function playBuffer(buf, label, btnId) {
-  await initAudio();
-  disconnectSource();
-  sourceNode = ctx.createBufferSource();
-  sourceNode.buffer = buf;
-  sourceNode.loop = true;
-  sourceNode.connect(workletNode);
-  sourceNode.start();
-  setActive(btnId);
-  document.getElementById('status').textContent = label + ' (looping)';
+  await initAudio(); disconnectSource();
+  sourceNode = ctx.createBufferSource(); sourceNode.buffer = buf; sourceNode.loop = true;
+  sourceNode.connect(workletNode); sourceNode.start();
+  setActive(btnId); document.getElementById('status').textContent = label + ' (looping)';
 }
-
 async function startBuiltin(url, label) {
   await initAudio();
   document.getElementById('status').textContent = 'Loading ' + label + '...';
   try {
-    const resp = await fetch(url);
-    const arrayBuf = await resp.arrayBuffer();
-    const audioBuf = await ctx.decodeAudioData(arrayBuf);
+    const resp = await fetch(url); const ab = await resp.arrayBuffer();
+    const audioBuf = await ctx.decodeAudioData(ab);
     await playBuffer(audioBuf, label, 'btn-' + label.toLowerCase());
-  } catch(e) {
-    document.getElementById('status').textContent = 'Failed to load: ' + e.message;
-  }
+  } catch(e) { document.getElementById('status').textContent = 'Failed: ' + e.message; }
 }
-
 async function loadFile(event) {
-  const file = event.target.files[0];
-  if (!file) return;
+  const file = event.target.files[0]; if (!file) return;
   await initAudio();
   document.getElementById('file-name').textContent = file.name;
-  document.getElementById('status').textContent = 'Loading ' + file.name + '...';
-  const arrayBuf = await file.arrayBuffer();
-  const audioBuf = await ctx.decodeAudioData(arrayBuf);
-  fileBuffer = audioBuf;
+  document.getElementById('status').textContent = 'Loading...';
+  const ab = await file.arrayBuffer(); const audioBuf = await ctx.decodeAudioData(ab);
   await playBuffer(audioBuf, file.name, null);
-  document.getElementById('status').textContent = file.name + ' (looping)';
 }
-
 async function startMic() {
   await initAudio(); disconnectSource();
   const stream = await navigator.mediaDevices.getUserMedia({audio:true});
   sourceNode = ctx.createMediaStreamSource(stream);
   sourceNode.connect(workletNode);
   sourceNode.stop = () => stream.getTracks().forEach(t=>t.stop());
-  setActive('btn-mic');
-  document.getElementById('status').textContent = 'Mic input active';
+  setActive('btn-mic'); document.getElementById('status').textContent = 'Mic active';
 }
-
 async function startTone() {
   await initAudio(); disconnectSource();
-  const osc = ctx.createOscillator(); osc.type='sawtooth'; osc.frequency.value=220;
-  const g = ctx.createGain(); g.gain.value=0.15;
-  osc.connect(g); g.connect(workletNode); osc.start();
-  sourceNode = osc;
-  setActive('btn-tone');
-  document.getElementById('status').textContent = 'Sawtooth 220Hz';
+  const o=ctx.createOscillator();o.type='sawtooth';o.frequency.value=220;
+  const g=ctx.createGain();g.gain.value=0.15;o.connect(g);g.connect(workletNode);o.start();
+  sourceNode=o; setActive('btn-tone'); document.getElementById('status').textContent='Sawtooth 220Hz';
 }
-
 async function startChord() {
   await initAudio(); disconnectSource();
-  const g = ctx.createGain(); g.gain.value=0.08;
-  const notes = [261.6,329.6,392,523.3];
-  const oscs = notes.map(f => { const o=ctx.createOscillator();o.type='sine';o.frequency.value=f;o.connect(g);o.start();return o; });
+  const g=ctx.createGain();g.gain.value=0.08;
+  const notes=[261.6,329.6,392,523.3];
+  const oscs=notes.map(f=>{const o=ctx.createOscillator();o.type='sine';o.frequency.value=f;o.connect(g);o.start();return o;});
   g.connect(workletNode);
-  sourceNode = { stop:()=>oscs.forEach(o=>{o.stop();o.disconnect()}), disconnect:()=>g.disconnect() };
-  setActive('btn-chord');
-  document.getElementById('status').textContent = 'C major chord';
+  sourceNode={stop:()=>oscs.forEach(o=>{o.stop();o.disconnect()}),disconnect:()=>g.disconnect()};
+  setActive('btn-chord'); document.getElementById('status').textContent='C major chord';
 }
-
 function stopAudio() {
-  disconnectSource();
-  setActive(null);
-  document.getElementById('status').textContent = 'Stopped';
-  document.getElementById('meter').style.width = '0%';
+  disconnectSource(); setActive(null);
+  document.getElementById('status').textContent='Stopped';
+  document.getElementById('meter').style.width='0%';
 }
 </script>
 </body>
