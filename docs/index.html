@@ -65,7 +65,7 @@ button.active { background: #3030a0; border-color: #5050c0; color: #fff; }
   <div class="knob"><label>Glitch</label><input type="range" id="k-glitch" min="0" max="100" value="20"><div class="value" id="v-glitch">20</div></div>
   <div class="knob"><label>Tone</label><input type="range" id="k-tone" min="0" max="100" value="70"><div class="value" id="v-tone">70</div></div>
   <div class="knob"><label>Depth</label><input type="range" id="k-depth" min="0" max="100" value="60"><div class="value" id="v-depth">60</div></div>
-  <div class="knob"><label>Input</label><input type="range" id="k-input" min="0" max="100" value="70"><div class="value" id="v-input">70</div></div>
+  <div class="knob"><label>Sustain</label><input type="range" id="k-sustain" min="0" max="100" value="30"><div class="value" id="v-sustain">30</div></div>
   <div class="knob"><label>Mix</label><input type="range" id="k-mix" min="0" max="100" value="65"><div class="value" id="v-mix">65</div></div>
 </div>
 
@@ -78,7 +78,7 @@ class DioramaticProcessor extends AudioWorkletProcessor {
     super();
     this.sr = sampleRate;
     this.grain = 0.5; this.shimmer = 0.4; this.reverb = 0.6; this.glitch = 0.2;
-    this.tone = 0.7; this.depth = 0.6; this.inputGain = 0.7; this.mix = 0.65;
+    this.tone = 0.7; this.depth = 0.6; this.sustain = 0.3; this.mix = 0.65;
     this.capSize = Math.floor(this.sr * 2);
     this.capL = new Float32Array(this.capSize);
     this.capR = new Float32Array(this.capSize);
@@ -90,6 +90,7 @@ class DioramaticProcessor extends AudioWorkletProcessor {
     }
     this.grainTimer = 0;
     this.sparkleTimer = 0;
+    this.smearTimer = 0;
     this.fdnSize = 8192;
     this.fdnLines = [new Float32Array(this.fdnSize),new Float32Array(this.fdnSize),new Float32Array(this.fdnSize),new Float32Array(this.fdnSize)];
     this.fdnPos = [0,0,0,0];
@@ -112,7 +113,7 @@ class DioramaticProcessor extends AudioWorkletProcessor {
       if(p.glitch!==undefined) this.glitch=p.glitch;
       if(p.tone!==undefined) this.tone=p.tone;
       if(p.depth!==undefined) this.depth=p.depth;
-      if(p.inputGain!==undefined) this.inputGain=p.inputGain;
+      if(p.sustain!==undefined) this.sustain=p.sustain;
       if(p.mix!==undefined) this.mix=p.mix;
     };
   }
@@ -148,7 +149,7 @@ class DioramaticProcessor extends AudioWorkletProcessor {
     const grainInterval=Math.max(64,Math.floor(4410/(0.5+this.grain*5.5)));
     const sparkleCheck=4410;
     for(let i=0;i<N;i++){
-      const dryL=inL[i]*this.inputGain;const dryR=inR[i]*this.inputGain;
+      const dryL=inL[i]*0.7;const dryR=inR[i]*0.7;
       this.capL[this.capPos]=dryL;this.capR[this.capPos]=dryR;
       this.capPos=(this.capPos+1)%this.capSize;
       if(this.grain>0.05){this.grainTimer++;
@@ -161,6 +162,15 @@ class DioramaticProcessor extends AudioWorkletProcessor {
       if(this.sparkleTimer>=sparkleCheck){this.sparkleTimer=0;
         const prob=0.03+this.glitch*0.4;
         if(this.rng()<prob){this.triggerGrain(4,0.4+this.glitch*0.4,2+this.rng()*5);}
+      }
+      if(this.sustain>0.02){this.smearTimer++;
+        const smearInt=Math.max(2000,Math.floor(22050/(0.3+this.sustain*3)));
+        if(this.smearTimer>=smearInt){this.smearTimer=0;
+          const smLen=100+this.rng()*200+this.sustain*200;
+          this.triggerGrain(2,0.15+this.sustain*0.3,smLen);
+          if(this.sustain>0.3){this.triggerGrain(1,0.1+this.sustain*0.2,smLen*1.5);}
+          if(this.sustain>0.6){this.triggerGrain(0.5,0.08+this.sustain*0.12,smLen*2);}
+        }
       }
       let wetL=0,wetR=0;
       for(let g of this.grains){if(!g.active)continue;
@@ -241,7 +251,7 @@ async function initAudio() {
     el.addEventListener('input', () => {
       const id = el.id.replace('k-', '');
       document.getElementById('v-' + id).textContent = el.value;
-      const map = {grain:'grain',shimmer:'shimmer',reverb:'reverb',glitch:'glitch',tone:'tone',depth:'depth',input:'inputGain',mix:'mix'};
+      const map = {grain:'grain',shimmer:'shimmer',reverb:'reverb',glitch:'glitch',tone:'tone',depth:'depth',sustain:'sustain',mix:'mix'};
       const msg = {}; msg[map[id]] = el.value / 100;
       workletNode.port.postMessage(msg);
     });
