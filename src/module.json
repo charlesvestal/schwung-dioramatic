@@ -3,7 +3,7 @@
   "name": "Dioramatic",
   "abbrev": "DIO",
   "version": "0.1.0",
-  "description": "Granular effects processor — 12 algorithms with grain, glitch, and delay engines",
+  "description": "Granular effects processor — 11 algorithms with grain, glitch, and delay engines",
   "author": "charlesvestal",
   "license": "MIT",
   "dsp": "dioramatic.so",
@@ -18,12 +18,12 @@
           "params": [
             {"key": "algorithm", "label": "Algorithm", "type": "enum", "options": [
               "Mosaic", "Seq", "Glide", "Haze", "Tunnel", "Strum",
-              "Blocks", "Interrupt", "Arp", "Pattern", "Warp", "Ethereal"
+              "Blocks", "Interrupt", "Arp", "Pattern", "Warp"
             ], "default": "Mosaic"},
             {"key": "variation", "label": "Variation", "type": "enum", "options": ["A","B","C","D"], "default": "A"},
             {"key": "activity", "label": "Activity", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01, "unit": "%"},
             {"key": "repeats", "label": "Repeats", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01, "unit": "%"},
-            {"key": "shape", "label": "Shape", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01, "unit": "%"},
+            {"key": "shape", "label": "Shape", "type": "float", "min": 0.0, "max": 1.0, "default": 0.95, "step": 0.01, "unit": "%"},
             {"key": "filter", "label": "Filter", "type": "float", "min": 0.0, "max": 1.0, "default": 1.0, "step": 0.01, "unit": "%"},
             {"key": "mix", "label": "Mix", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01, "unit": "%"},
             {"key": "space", "label": "Space", "type": "float", "min": 0.0, "max": 1.0, "default": 0.3, "step": 0.01, "unit": "%"},
@@ -35,7 +35,7 @@
             {"key": "reverse", "label": "Reverse", "type": "enum", "options": ["Off","On"], "default": "Off"},
             {"key": "hold", "label": "Hold", "type": "enum", "options": ["Off","On"], "default": "Off"}
           ],
-          "knobs": ["activity", "repeats", "shape", "filter", "mix", "time_div", "space", "algorithm"]
+          "knobs": ["activity", "repeats", "mix", "space", "filter", "shape", "pitch_mod_depth", "filter_res"]
         }
       }
     }

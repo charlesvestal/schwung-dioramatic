@@ -329,6 +329,9 @@ typedef struct {
     int pending_algorithm;
     int pending_variation;
 
+    /* DC blocker state */
+    float dc_prev_in_l, dc_prev_in_r, dc_prev_out_l, dc_prev_out_r;
+
     /* MIDI clock */
     uint32_t midi_clock_tick_count;
     uint32_t midi_clock_sample_counter;  /* samples since last clock reset */
@@ -512,11 +515,14 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     for (int i = 0; i < FDN_LINES; i++) {
         /* Modulated read position — creates subtle pitch/time variation in the tail */
         float mod_offset = sinf(2.0f * (float)M_PI * rev->mod_phase[i]) * mod_depth;
-        int base_delay = p->delay_lengths[i] + (int)mod_offset;
-        if (base_delay < 1) base_delay = 1;
-        if (base_delay >= FDN_MAX_DELAY) base_delay = FDN_MAX_DELAY - 1;
-        int read_pos = (rev->write_pos[i] - base_delay + FDN_MAX_DELAY) & (FDN_MAX_DELAY - 1);
-        taps[i] = rev->lines[i][read_pos];
+        float frac_delay = (float)p->delay_lengths[i] + mod_offset;
+        if (frac_delay < 1.0f) frac_delay = 1.0f;
+        if (frac_delay >= (float)(FDN_MAX_DELAY - 1)) frac_delay = (float)(FDN_MAX_DELAY - 2);
+        int rd_int = (int)frac_delay;
+        float rd_frac = frac_delay - (float)rd_int;
+        int rp0 = (rev->write_pos[i] - rd_int + FDN_MAX_DELAY) & (FDN_MAX_DELAY - 1);
+        int rp1 = (rp0 - 1 + FDN_MAX_DELAY) & (FDN_MAX_DELAY - 1);
+        taps[i] = rev->lines[i][rp0] * (1.0f - rd_frac) + rev->lines[i][rp1] * rd_frac;
         rev->mod_phase[i] += mod_rates[i] / 44100.0f;
         if (rev->mod_phase[i] >= 1.0f) rev->mod_phase[i] -= 1.0f;
     }
@@ -558,6 +564,9 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
 
     float shimmer_out = samp_a * env_a + samp_b * env_b;
     rev->shimmer_read_phase_a += 2.0f;  /* 2x speed = octave up */
+    /* Wrap phase to prevent float precision loss over extended use */
+    while (rev->shimmer_read_phase_a >= (float)SHIMMER_BUF_SIZE)
+        rev->shimmer_read_phase_a -= (float)SHIMMER_BUF_SIZE;
     /* Keep read phase from drifting too far from write */
     float dist = (float)rev->shimmer_write_pos - rev->shimmer_read_phase_a;
     if (dist < 0) dist += (float)SHIMMER_BUF_SIZE;
@@ -580,8 +589,7 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         /* Inject shimmer — cascading crystalline harmonics */
         fb += shimmer_out * shimmer_level;
         /* Safety limiter prevents runaway buildup */
-        if (fb > 0.9f) fb = 0.9f;
-        else if (fb < -0.9f) fb = -0.9f;
+        fb = tanhf(fb * 1.1f) * 0.9f;
         /* Write with input */
         rev->lines[i][rev->write_pos[i]] = diff_in + fb;
         rev->write_pos[i] = (rev->write_pos[i] + 1) & (FDN_MAX_DELAY - 1);
@@ -1126,7 +1134,7 @@ static void blocks_tick(dioramatic_instance_t *inst) {
             case 0: { /* A: Regular, predictable stutters */
                 prob = 1.0f;
                 grain_len = sub / (2 + (int)(inst->activity * 6.0f));
-                if (grain_len < 64) grain_len = 64;
+                if (grain_len < 128) grain_len = 128;
                 if (rng_float(&inst->rng_state) < prob) {
                     grain_t *g = find_free_grain(inst);
                     if (g) {
@@ -1139,7 +1147,7 @@ static void blocks_tick(dioramatic_instance_t *inst) {
             case 1: { /* B: Random bursts — probabilistic */
                 prob = 0.2f + inst->activity * 0.8f;
                 grain_len = sub / 4 + (int)(rng_float(&inst->rng_state) * ((float)sub / 4.0f));
-                if (grain_len < 64) grain_len = 64;
+                if (grain_len < 128) grain_len = 128;
                 if (rng_float(&inst->rng_state) < prob) {
                     grain_t *g = find_free_grain(inst);
                     if (g) {
@@ -1152,7 +1160,7 @@ static void blocks_tick(dioramatic_instance_t *inst) {
             case 2: { /* C: Pitch-shifted bursts */
                 prob = 0.2f + inst->activity * 0.8f;
                 grain_len = sub / 4 + (int)(rng_float(&inst->rng_state) * ((float)sub / 4.0f));
-                if (grain_len < 64) grain_len = 64;
+                if (grain_len < 128) grain_len = 128;
                 if (rng_float(&inst->rng_state) < prob) {
                     static const float block_speeds[4] = {0.5f, 1.0f, 1.5f, 2.0f};
                     int si = (int)(rng_float(&inst->rng_state) * 4.0f);
@@ -1173,7 +1181,7 @@ static void blocks_tick(dioramatic_instance_t *inst) {
                         grain_t *g = find_free_grain(inst);
                         if (g) {
                             grain_len = sub / 8 + (int)(rng_float(&inst->rng_state) * ((float)sub / 8.0f));
-                            if (grain_len < 64) grain_len = 64;
+                            if (grain_len < 128) grain_len = 128;
                             int s = (start + (int)(rng_float(&inst->rng_state) * ((float)sub / 2.0f)) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
                             init_grain_common(g, inst, s, grain_len, 1.0f);
                             g->amplitude = (0.8f + inst->repeats * 0.2f) * (0.3f + rng_float(&inst->rng_state) * 0.7f);
@@ -1237,7 +1245,7 @@ static void interrupt_tick(dioramatic_instance_t *inst) {
                     }
                     case 3: { /* D: Very short, loud */
                         int grain_len = sub / 8;
-                        if (grain_len < 64) grain_len = 64;
+                        if (grain_len < 128) grain_len = 128;
                         int s = (start + (int)(rng_float(&inst->rng_state) * (float)sub) + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
                         init_grain_common(g, inst, s, grain_len, 1.0f);
                         g->amplitude = 1.0f;
@@ -1459,7 +1467,7 @@ static void *v2_create_instance(const char *module_dir, const char *config_json)
     inst->variation = 0;        /* A */
     inst->activity = 0.5f;
     inst->repeats = 0.5f;
-    inst->shape = 0.5f;
+    inst->shape = 0.95f;
     inst->filter = 1.0f;
     inst->mix = 0.5f;
     inst->space = 0.3f;
@@ -1543,7 +1551,7 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
             /* Hold turned ON: capture recent audio into hold buffer */
             int len = inst->subdivision_samples;
             if (len > CAPTURE_SAMPLES) len = CAPTURE_SAMPLES;
-            if (len < 64) len = 64;
+            if (len < 128) len = 128;
             inst->hold_state.length = len;
             int cap_wp = inst->capture.write_pos;
             for (int h = 0; h < len; h++) {
@@ -1577,7 +1585,7 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         inst->capture.buffer[wp].r = dry_r;
 
         /* 2b. Hold/Freeze: feed hold buffer into capture buffer so grains re-process it */
-        if (inst->hold_state.active) {
+        if (inst->hold_state.active && inst->hold_state.length > 0) {
             float hold_l = inst->hold_state.buffer[inst->hold_state.read_pos].l;
             float hold_r = inst->hold_state.buffer[inst->hold_state.read_pos].r;
             inst->hold_state.read_pos = (inst->hold_state.read_pos + 1) % inst->hold_state.length;
@@ -1797,8 +1805,17 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         float out_l = dry_l * (1.0f - mix) + wet_l * mix;
         float out_r = dry_r * (1.0f - mix) + wet_r * mix;
 
-        /* 9. Soft clip with tanh for musical saturation (bypass at mix=0 for clean passthrough) */
+        /* 9. DC blocker and soft clip (bypass both at mix=0 for clean passthrough) */
         if (mix > 0.001f) {
+            /* DC blocker — prevents offset buildup from reverb/shimmer feedback */
+            float dc_coeff = 0.9975f;
+            float dc_out_l = out_l - inst->dc_prev_in_l + dc_coeff * inst->dc_prev_out_l;
+            float dc_out_r = out_r - inst->dc_prev_in_r + dc_coeff * inst->dc_prev_out_r;
+            inst->dc_prev_in_l = out_l; inst->dc_prev_in_r = out_r;
+            inst->dc_prev_out_l = dc_out_l; inst->dc_prev_out_r = dc_out_r;
+            out_l = dc_out_l; out_r = dc_out_r;
+
+            /* 10. Soft clip with tanh for musical saturation */
             out_l = tanhf(out_l * 1.5f) * 0.667f;
             out_r = tanhf(out_r * 1.5f) * 0.667f;
         }
@@ -1906,6 +1923,13 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
             int idx = find_enum_index(sv, onoff_names, 2);
             if (idx >= 0) inst->hold = idx;
         }
+        /* Clamp enum values to valid ranges */
+        if (inst->algorithm < 0 || inst->algorithm >= NUM_ALGORITHMS) inst->algorithm = 0;
+        if (inst->variation < 0 || inst->variation >= NUM_VARIATIONS) inst->variation = 0;
+        if (inst->time_div < 0 || inst->time_div >= NUM_TIME_DIVS) inst->time_div = 2;
+        if (inst->reverb_mode < 0 || inst->reverb_mode >= NUM_REVERB_MODES) inst->reverb_mode = 0;
+        if (inst->reverse < 0 || inst->reverse > 1) inst->reverse = 0;
+        if (inst->hold < 0 || inst->hold > 1) inst->hold = 0;
         /* Mark delay taps dirty after state restore */
         inst->delay_taps_dirty = 1;
     }
@@ -1979,7 +2003,7 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
     } else if (strcmp(key, "ui_hierarchy") == 0) {
         return snprintf(buf, buf_len,
             "{\"modes\":null,\"levels\":{\"root\":{\"children\":null,"
-            "\"knobs\":[\"activity\",\"repeats\",\"shape\",\"filter\",\"mix\",\"time_div\",\"space\",\"algorithm\"],"
+            "\"knobs\":[\"activity\",\"repeats\",\"mix\",\"space\",\"filter\",\"shape\",\"pitch_mod_depth\",\"filter_res\"],"
             "\"params\":[\"algorithm\",\"variation\",\"activity\",\"repeats\",\"shape\",\"filter\",\"mix\",\"space\","
             "\"time_div\",\"pitch_mod_depth\",\"pitch_mod_rate\",\"filter_res\",\"reverb_mode\",\"reverse\",\"hold\"]}}}");
     }
