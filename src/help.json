@@ -6,7 +6,7 @@
     "warmth": "Tonal color — bright and airy at low, dark and amber at high",
     "drift": "Evolving movement — still and frozen at low, slowly breathing at high",
     "sustain": "How long things ring — short events at low, infinite at high",
-    "scatter": "Spatial spread — focused mono at low, wide stereo field at high",
+    "scatter": "Grain density and stereo spread — few focused grains at low, many scattered wide at high",
     "mix": "Blend between dry signal and effect"
   }
 }

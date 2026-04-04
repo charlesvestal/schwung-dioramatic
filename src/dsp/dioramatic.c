@@ -366,11 +366,17 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         1447 + (int)(inst->space * 3400.0f),
         1663 + (int)(inst->space * 3900.0f)
     };
+    /* Scatter controls overall grain density + stereo spread.
+       Low = few focused grains. High = many grains scattered wide. */
+    float density = 0.2f + inst->scatter * 0.8f;  /* 0.2 to 1.0 */
+    float pan_width_val = inst->scatter;
+
     float shim_feedback = inst->shimmer * 0.12f;
     int shim_grain_rate = inst->shimmer > 0.1f
-        ? (int)(8000.0f / (0.3f + inst->shimmer * 4.0f)) : 999999;
+        ? (int)(8000.0f / ((0.3f + inst->shimmer * 4.0f) * density)) : 999999;
+    if (shim_grain_rate < 128) shim_grain_rate = 128;
     int cloud_rate = inst->smear > 0.05f
-        ? (int)(6000.0f / (0.2f + inst->smear * 6.0f)) : 999999;
+        ? (int)(6000.0f / ((0.2f + inst->smear * 6.0f) * density)) : 999999;
     if (cloud_rate < 128) cloud_rate = 128;
     float cloud_len_ms = 15.0f + inst->smear * 80.0f;
     float cutoff_hz = 200.0f * powf(100.0f, 1.0f - inst->warmth);
@@ -381,7 +387,7 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
     float rev_mod_depth = 4.0f + inst->drift * 20.0f;
     float rev_feedback = fminf(0.97f, 0.65f + inst->sustain * 0.32f);
     float sustain_grain_len = 50.0f + inst->sustain * 350.0f;
-    float pan_width = inst->scatter;
+    float pan_width = pan_width_val;
 
     /* SVF coefficients */
     float svf_g = tanf((float)M_PI * cutoff_hz / (float)SAMPLE_RATE);

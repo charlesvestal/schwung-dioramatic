@@ -61,7 +61,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #8080e0; outline-
   <div class="knob"><label>Warmth</label><span class="hint">airy &rarr; amber</span><input type="range" id="k-warmth" min="0" max="100" value="45"><div class="value" id="v-warmth">45</div></div>
   <div class="knob"><label>Drift</label><span class="hint">still &rarr; breathing</span><input type="range" id="k-drift" min="0" max="100" value="35"><div class="value" id="v-drift">35</div></div>
   <div class="knob"><label>Sustain</label><span class="hint">short &rarr; infinite</span><input type="range" id="k-sustain" min="0" max="100" value="50"><div class="value" id="v-sustain">50</div></div>
-  <div class="knob"><label>Scatter</label><span class="hint">focused &rarr; wide</span><input type="range" id="k-scatter" min="0" max="100" value="40"><div class="value" id="v-scatter">40</div></div>
+  <div class="knob"><label>Scatter</label><span class="hint">few &rarr; many</span><input type="range" id="k-scatter" min="0" max="100" value="40"><div class="value" id="v-scatter">40</div></div>
   <div class="knob"><label>Mix</label><span class="hint">dry &rarr; wet</span><input type="range" id="k-mix" min="0" max="100" value="60"><div class="value" id="v-mix">60</div></div>
 </div>
 
@@ -178,32 +178,24 @@ class DioramaticProcessor extends AudioWorkletProcessor {
 
     // Shimmer -> octave-up feedback in reverb + bright grain rate
     // 0=natural reverb, 1=cascading crystal harmonics
-    const shimFeedback = this.shimmer * 0.12;
-    const shimGrainRate = this.shimmer > 0.1 ? Math.floor(8000 / (0.3 + this.shimmer * 4)) : 999999;
+    // Scatter -> grain density multiplier + stereo spread
+    // Low = few focused grains. High = many grains scattered wide.
+    const density = 0.2 + this.scatter * 0.8;
+    const panWidth = this.scatter;
 
-    // Smear -> grain cloud density + grain length
-    // 0=no grains (sharp attacks), 1=dense cloud (everything dissolves)
-    const cloudRate = this.smear > 0.05 ? Math.max(64, Math.floor(6000 / (0.2 + this.smear * 6))) : 999999;
+    const shimFeedback = this.shimmer * 0.12;
+    const shimGrainRate = this.shimmer > 0.1 ? Math.max(128, Math.floor(8000 / ((0.3 + this.shimmer * 4) * density))) : 999999;
+
+    // Smear -> grain cloud base rate + grain length
+    const cloudRate = this.smear > 0.05 ? Math.max(128, Math.floor(6000 / ((0.2 + this.smear * 6) * density))) : 999999;
     const cloudLenMs = 15 + this.smear * 80;
 
-    // Warmth -> filter cutoff (inverted: more warmth = lower cutoff)
-    // 0=bright/airy, 1=dark/amber
     const cutHz = Math.min(20000, 200 * Math.pow(100, 1 - this.warmth));
-
-    // Drift -> pitch mod depth + reverb line modulation depth
-    // 0=still/frozen, 1=constantly evolving
     const pitchModDepth = this.drift * 0.15;
     const pitchModRate = 0.05 + this.drift * 0.4;
     const revModDepth = 4 + this.drift * 20;
-
-    // Sustain -> reverb feedback + grain overlap length
-    // 0=short, 1=near-infinite
     const revFeedback = Math.min(0.97, 0.65 + this.sustain * 0.32);
     const sustainGrainLen = 50 + this.sustain * 350;
-
-    // Scatter -> stereo width of grains
-    // 0=mono/focused, 1=wide stereo field
-    const panWidth = this.scatter;
 
     // Reverb damping: derived from warmth (warmer = more damping)
     const damping = 0.15 + this.warmth * 0.5;
