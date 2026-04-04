@@ -1,19 +1,19 @@
 {
   "parameters": {
-    "algorithm": "Effect algorithm (Mosaic, Seq, Glide, Haze, Tunnel, Strum, Blocks, Interrupt, Arp, Pattern, Warp)",
-    "variation": "Algorithm variation (A/B/C/D) — changes internal routing and behavior",
-    "activity": "Algorithm-specific macro — generally more or less of what the effect does",
-    "repeats": "Algorithm-specific macro — generally controls sustain and tail length",
-    "shape": "Modulation waveform — Square / Ramp / Triangle / Saw zones",
-    "filter": "Lowpass filter cutoff (fully CW = wide open)",
-    "mix": "Dry/wet crossfade",
-    "space": "Stereo reverb send amount",
-    "time_div": "Musical subdivision for tempo sync",
-    "pitch_mod_depth": "LFO pitch modulation depth",
-    "pitch_mod_rate": "LFO pitch modulation rate",
-    "filter_res": "Lowpass filter resonance",
-    "reverb_mode": "Reverb character (Bright / Dark / Hall / Ambient)",
-    "reverse": "Reverse grain/delay playback direction",
-    "hold": "Freeze input and re-process through active effects for evolving textures"
+    "algorithm": "Choose the effect type: Mosaic (shimmer loops), Seq (shuffled rhythms), Glide (pitch sweep), Haze (granular wash), Tunnel (drone), Strum (onset cascade), Blocks (stutter), Interrupt (glitch bursts), Arp (arpeggiation), Pattern (multi-tap delay), Warp (pitched delay)",
+    "variation": "Each algorithm has 4 flavors (A-D) that change its character",
+    "activity": "How much the effect does — sparse and delicate at low, dense and immersive at high",
+    "repeats": "How long the effect rings — short events at low, sustained wash at high",
+    "mix": "Blend between your dry signal and the effect",
+    "space": "How much reverb — intimate at low, cathedral at high",
+    "filter": "Brightness — dark and warm at low, open and airy at high",
+    "shape": "Rhythmic gating of the wet signal — Square / Ramp / Triangle / Saw zones. Fully clockwise = off",
+    "time_div": "Musical tempo subdivision — affects grain lengths and delay times",
+    "reverb_mode": "Reverb character — Bright (tight), Dark (warm), Hall (spacious), Ambient (massive with shimmer)",
+    "pitch_mod_depth": "Gentle pitch wobble for chorus-like warmth — subtle at low, dramatic at high",
+    "pitch_mod_rate": "Speed of the pitch wobble",
+    "filter_res": "Filter resonance — adds emphasis at the cutoff frequency",
+    "reverse": "Reverse grain playback — softens attacks and smears time",
+    "hold": "Freeze and loop the current sound through the effect — creates evolving textures from a single moment"
   }
 }

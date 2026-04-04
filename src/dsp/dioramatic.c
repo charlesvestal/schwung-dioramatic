@@ -2068,10 +2068,15 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
             "]");
     } else if (strcmp(key, "ui_hierarchy") == 0) {
         return snprintf(buf, buf_len,
-            "{\"modes\":null,\"levels\":{\"root\":{\"children\":null,"
+            "{\"modes\":null,\"levels\":{"
+            "\"root\":{\"children\":null,"
             "\"knobs\":[\"activity\",\"repeats\",\"mix\",\"space\",\"filter\",\"shape\",\"pitch_mod_depth\",\"filter_res\"],"
-            "\"params\":[\"algorithm\",\"variation\",\"activity\",\"repeats\",\"shape\",\"filter\",\"mix\",\"space\","
-            "\"time_div\",\"pitch_mod_depth\",\"pitch_mod_rate\",\"filter_res\",\"reverb_mode\",\"reverse\",\"hold\"]}}}");
+            "\"params\":[\"algorithm\",\"variation\",\"activity\",\"repeats\",\"mix\",\"space\",\"filter\","
+            "{\"level\":\"advanced\",\"label\":\"Advanced...\"}]},"
+            "\"advanced\":{\"children\":null,"
+            "\"knobs\":[\"shape\",\"pitch_mod_depth\",\"pitch_mod_rate\",\"filter_res\",\"activity\",\"repeats\",\"mix\",\"space\"],"
+            "\"params\":[\"shape\",\"time_div\",\"reverb_mode\",\"pitch_mod_depth\",\"pitch_mod_rate\",\"filter_res\",\"reverse\",\"hold\"]}"
+            "}}");
     }
 
     return -1;

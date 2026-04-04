@@ -3,7 +3,7 @@
   "name": "Dioramatic",
   "abbrev": "DIO",
   "version": "0.1.0",
-  "description": "Granular effects processor — 11 algorithms with grain, glitch, and delay engines",
+  "description": "Granular shimmer processor — crystals, drones, glitch, and delay",
   "author": "charlesvestal",
   "license": "MIT",
   "dsp": "dioramatic.so",
@@ -23,19 +23,26 @@
             {"key": "variation", "label": "Variation", "type": "enum", "options": ["A","B","C","D"], "default": "A"},
             {"key": "activity", "label": "Activity", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01, "unit": "%"},
             {"key": "repeats", "label": "Repeats", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01, "unit": "%"},
-            {"key": "shape", "label": "Shape", "type": "float", "min": 0.0, "max": 1.0, "default": 0.95, "step": 0.01, "unit": "%"},
-            {"key": "filter", "label": "Filter", "type": "float", "min": 0.0, "max": 1.0, "default": 1.0, "step": 0.01, "unit": "%"},
             {"key": "mix", "label": "Mix", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01, "unit": "%"},
             {"key": "space", "label": "Space", "type": "float", "min": 0.0, "max": 1.0, "default": 0.3, "step": 0.01, "unit": "%"},
-            {"key": "time_div", "label": "Time", "type": "enum", "options": ["1/4","1/2","1x","2x","4x","8x"], "default": "1x"},
-            {"key": "pitch_mod_depth", "label": "Pitch Depth", "type": "float", "min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01, "unit": "%"},
-            {"key": "pitch_mod_rate", "label": "Pitch Rate", "type": "float", "min": 0.0, "max": 1.0, "default": 0.3, "step": 0.01, "unit": "%"},
+            {"key": "filter", "label": "Filter", "type": "float", "min": 0.0, "max": 1.0, "default": 1.0, "step": 0.01, "unit": "%"},
+            {"level": "advanced", "label": "Advanced..."}
+          ],
+          "knobs": ["activity", "repeats", "mix", "space", "filter", "shape", "pitch_mod_depth", "filter_res"]
+        },
+        "advanced": {
+          "name": "Advanced",
+          "params": [
+            {"key": "shape", "label": "Shape", "type": "float", "min": 0.0, "max": 1.0, "default": 0.95, "step": 0.01, "unit": "%"},
+            {"key": "time_div", "label": "Time Div", "type": "enum", "options": ["1/4","1/2","1x","2x","4x","8x"], "default": "1x"},
+            {"key": "reverb_mode", "label": "Reverb", "type": "enum", "options": ["Bright","Dark","Hall","Ambient"], "default": "Bright"},
+            {"key": "pitch_mod_depth", "label": "Mod Depth", "type": "float", "min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01, "unit": "%"},
+            {"key": "pitch_mod_rate", "label": "Mod Rate", "type": "float", "min": 0.0, "max": 1.0, "default": 0.3, "step": 0.01, "unit": "%"},
             {"key": "filter_res", "label": "Resonance", "type": "float", "min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01, "unit": "%"},
-            {"key": "reverb_mode", "label": "Reverb Mode", "type": "enum", "options": ["Bright","Dark","Hall","Ambient"], "default": "Bright"},
             {"key": "reverse", "label": "Reverse", "type": "enum", "options": ["Off","On"], "default": "Off"},
             {"key": "hold", "label": "Hold", "type": "enum", "options": ["Off","On"], "default": "Off"}
           ],
-          "knobs": ["activity", "repeats", "mix", "space", "filter", "shape", "pitch_mod_depth", "filter_res"]
+          "knobs": ["shape", "pitch_mod_depth", "pitch_mod_rate", "filter_res", "activity", "repeats", "mix", "space"]
         }
       }
     }
