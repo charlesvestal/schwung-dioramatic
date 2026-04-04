@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -24,11 +24,12 @@ button.active { background: #3030a0; border-color: #5050c0; color: #fff; }
 @media (max-width: 500px) { .controls { grid-template-columns: repeat(2, 1fr); } }
 .knob { background: #12122a; border-radius: 10px; padding: 14px 10px; text-align: center; border: 1px solid #1a1a3a; }
 .knob label { display: block; font-size: 10px; letter-spacing: 1.5px; color: #8080a0; margin-bottom: 2px; text-transform: uppercase; }
-.knob .hint { display: block; font-size: 8px; color: #404060; margin-bottom: 6px; letter-spacing: 0.5px; }
+.knob .hint { display: block; font-size: 8px; color: #7070a0; margin-bottom: 6px; letter-spacing: 0.5px; }
 .knob input[type=range] { width: 100%; -webkit-appearance: none; height: 6px; border-radius: 3px; background: #1a1a3a; outline: none; }
 .knob input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #6060c0; cursor: pointer; border: 2px solid #8080e0; }
 .knob .value { font-size: 16px; color: #a0a0d0; margin-top: 4px; font-variant-numeric: tabular-nums; }
-.status { font-size: 11px; color: #404060; margin-top: 4px; }
+.status { font-size: 11px; color: #8080a0; margin-top: 4px; }
+button:focus-visible, input:focus-visible { outline: 2px solid #8080e0; outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -64,7 +65,7 @@ button.active { background: #3030a0; border-color: #5050c0; color: #fff; }
   <div class="knob"><label>Mix</label><span class="hint">dry &rarr; wet</span><input type="range" id="k-mix" min="0" max="100" value="60"><div class="value" id="v-mix">60</div></div>
 </div>
 
-<div class="status" id="status">Click a source to begin</div>
+<div class="status" id="status" role="status" aria-live="polite">Click a source to begin</div>
 
 <script>
 const processorCode = `
