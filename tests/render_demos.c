@@ -367,85 +367,24 @@ int main(void) {
      * - Filter < 0.8 tames harshness
      * - Activity/Repeats in the 0.5-0.8 range sound best
      */
-    /* Presets exploring "space crystal smearing across space-time,
-       voices of angels carrying music to a new dimension."
-       Built from the user's favorites: Tunnel overtones, Mosaic reverse,
-       ambient wash, Haze shimmer, and Blocks pitch-glitch for dynamism. */
-    /* Your 6 favorites from the shimmer reverb version, rendered with
-       both piano stabs and arp input. These are the presets that sounded
-       good before — Haze diffuse, Haze shimmer, Tunnel overtones,
-       Blocks pitch-glitch, Ambient wash, Mosaic reverse. */
+    /* Unified effect — 8 musical knobs sweeping through the parameter space */
     preset_t presets[] = {
-        /* #6 Haze A — granular diffuse wash */
-        {"haze-diffuse",
-         "{\"algorithm\":3,\"variation\":0,\"activity\":0.75,\"repeats\":0.6,"
-         "\"shape\":1.0,\"filter\":0.75,\"mix\":0.6,\"space\":0.45,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.12,\"pitch_mod_rate\":0.35,"
-         "\"filter_res\":0.2,\"reverb_mode\":2,\"reverse\":0,\"hold\":0}"},
-
-        /* #7 Haze C — octave shimmer cloud */
-        {"haze-shimmer",
-         "{\"algorithm\":3,\"variation\":2,\"activity\":0.8,\"repeats\":0.65,"
-         "\"shape\":1.0,\"filter\":0.9,\"mix\":0.65,\"space\":0.55,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.08,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.0,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
-
-        /* #8 Tunnel B — drone with overtone harmonics */
-        {"tunnel-overtones",
-         "{\"algorithm\":4,\"variation\":1,\"activity\":0.65,\"repeats\":0.75,"
-         "\"shape\":1.0,\"filter\":0.65,\"mix\":0.65,\"space\":0.5,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.1,\"pitch_mod_rate\":0.12,"
-         "\"filter_res\":0.25,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
-
-        /* #12 Blocks C — pitch-shifted glitch sparkles */
-        {"blocks-pitchglitch",
-         "{\"algorithm\":6,\"variation\":2,\"activity\":0.75,\"repeats\":0.6,"
-         "\"shape\":1.0,\"filter\":1.0,\"mix\":0.55,\"space\":0.3,"
-         "\"time_div\":0,\"pitch_mod_depth\":0.0,\"pitch_mod_rate\":0.3,"
-         "\"filter_res\":0.0,\"reverb_mode\":0,\"reverse\":0,\"hold\":0}"},
-
-        /* #19 Ambient wash — full Mosaic D through massive reverb */
-        {"ambient-wash",
-         "{\"algorithm\":0,\"variation\":3,\"activity\":0.85,\"repeats\":0.85,"
-         "\"shape\":1.0,\"filter\":0.55,\"mix\":0.8,\"space\":0.85,"
-         "\"time_div\":4,\"pitch_mod_depth\":0.1,\"pitch_mod_rate\":0.08,"
-         "\"filter_res\":0.2,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
-
-        /* #20 Mosaic A reverse — time-smeared shimmer */
-        {"mosaic-reverse",
-         "{\"algorithm\":0,\"variation\":0,\"activity\":0.6,\"repeats\":0.7,"
-         "\"shape\":1.0,\"filter\":0.85,\"mix\":0.65,\"space\":0.45,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.12,\"pitch_mod_rate\":0.25,"
-         "\"filter_res\":0.1,\"reverb_mode\":2,\"reverse\":1,\"hold\":0}"},
-
-        /* NEW: Sparse haze — very low activity, mostly reverb tail with
-           occasional delicate grain events. The "sparkle" version. */
-        {"haze-sparse-sparkle",
-         "{\"algorithm\":3,\"variation\":2,\"activity\":0.15,\"repeats\":0.5,"
-         "\"shape\":1.0,\"filter\":0.8,\"mix\":0.8,\"space\":0.85,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.05,"
-         "\"filter_res\":0.05,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
-
-        /* NEW: Sparse tunnel — very low activity drone, mostly shimmer reverb */
-        {"tunnel-sparse",
-         "{\"algorithm\":4,\"variation\":1,\"activity\":0.2,\"repeats\":0.6,"
-         "\"shape\":1.0,\"filter\":0.7,\"mix\":0.75,\"space\":0.85,"
-         "\"time_div\":4,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.04,"
-         "\"filter_res\":0.15,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
-
-        /* NEW: Sparse mosaic reverse — very few grains, heavy reverb */
-        {"mosaic-reverse-sparse",
-         "{\"algorithm\":0,\"variation\":0,\"activity\":0.15,\"repeats\":0.55,"
-         "\"shape\":1.0,\"filter\":0.75,\"mix\":0.8,\"space\":0.85,"
-         "\"time_div\":2,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.05,"
-         "\"filter_res\":0.1,\"reverb_mode\":3,\"reverse\":1,\"hold\":0}"},
-
-        /* NEW: Ambient wash sparse — very delicate, open, floating */
-        {"ambient-sparse",
-         "{\"algorithm\":0,\"variation\":3,\"activity\":0.2,\"repeats\":0.6,"
-         "\"shape\":1.0,\"filter\":0.7,\"mix\":0.85,\"space\":0.9,"
-         "\"time_div\":4,\"pitch_mod_depth\":0.06,\"pitch_mod_rate\":0.04,"
-         "\"filter_res\":0.1,\"reverb_mode\":3,\"reverse\":0,\"hold\":0}"},
+        {"default",
+         "{\"space\":0.55,\"shimmer\":0.35,\"smear\":0.40,\"warmth\":0.45,\"drift\":0.35,\"sustain\":0.50,\"scatter\":0.40,\"mix\":0.60}"},
+        {"sparse-sparkle",
+         "{\"space\":0.70,\"shimmer\":0.50,\"smear\":0.10,\"warmth\":0.40,\"drift\":0.25,\"sustain\":0.60,\"scatter\":0.50,\"mix\":0.75}"},
+        {"dense-wash",
+         "{\"space\":0.80,\"shimmer\":0.40,\"smear\":0.85,\"warmth\":0.50,\"drift\":0.40,\"sustain\":0.75,\"scatter\":0.50,\"mix\":0.80}"},
+        {"crystal-cave",
+         "{\"space\":0.85,\"shimmer\":0.70,\"smear\":0.30,\"warmth\":0.30,\"drift\":0.40,\"sustain\":0.70,\"scatter\":0.60,\"mix\":0.75}"},
+        {"warm-amber",
+         "{\"space\":0.60,\"shimmer\":0.25,\"smear\":0.50,\"warmth\":0.80,\"drift\":0.30,\"sustain\":0.55,\"scatter\":0.35,\"mix\":0.65}"},
+        {"bright-air",
+         "{\"space\":0.65,\"shimmer\":0.45,\"smear\":0.35,\"warmth\":0.10,\"drift\":0.35,\"sustain\":0.50,\"scatter\":0.55,\"mix\":0.65}"},
+        {"infinite-drift",
+         "{\"space\":0.90,\"shimmer\":0.50,\"smear\":0.60,\"warmth\":0.50,\"drift\":0.80,\"sustain\":0.90,\"scatter\":0.60,\"mix\":0.85}"},
+        {"tight-shimmer",
+         "{\"space\":0.25,\"shimmer\":0.60,\"smear\":0.20,\"warmth\":0.35,\"drift\":0.20,\"sustain\":0.30,\"scatter\":0.30,\"mix\":0.55}"},
     };
 
     int num_presets = sizeof(presets) / sizeof(presets[0]);

@@ -2,8 +2,8 @@
   "id": "dioramatic",
   "name": "Dioramatic",
   "abbrev": "DIO",
-  "version": "0.1.0",
-  "description": "Granular shimmer processor — crystals, drones, glitch, and delay",
+  "version": "0.2.0",
+  "description": "Granular shimmer — crystals, drones, and space",
   "author": "charlesvestal",
   "license": "MIT",
   "dsp": "dioramatic.so",
@@ -16,33 +16,16 @@
         "root": {
           "name": "Dioramatic",
           "params": [
-            {"key": "algorithm", "label": "Algorithm", "type": "enum", "options": [
-              "Mosaic", "Seq", "Glide", "Haze", "Tunnel", "Strum",
-              "Blocks", "Interrupt", "Arp", "Pattern", "Warp"
-            ], "default": "Mosaic"},
-            {"key": "variation", "label": "Variation", "type": "enum", "options": ["A","B","C","D"], "default": "A"},
-            {"key": "activity", "label": "Activity", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01, "unit": "%"},
-            {"key": "repeats", "label": "Repeats", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01, "unit": "%"},
-            {"key": "mix", "label": "Mix", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01, "unit": "%"},
-            {"key": "space", "label": "Space", "type": "float", "min": 0.0, "max": 1.0, "default": 0.3, "step": 0.01, "unit": "%"},
-            {"key": "filter", "label": "Filter", "type": "float", "min": 0.0, "max": 1.0, "default": 1.0, "step": 0.01, "unit": "%"},
-            {"level": "advanced", "label": "Advanced..."}
+            {"key": "space", "label": "Space", "type": "float", "min": 0.0, "max": 1.0, "default": 0.55, "step": 0.01, "unit": "%"},
+            {"key": "shimmer", "label": "Shimmer", "type": "float", "min": 0.0, "max": 1.0, "default": 0.35, "step": 0.01, "unit": "%"},
+            {"key": "smear", "label": "Smear", "type": "float", "min": 0.0, "max": 1.0, "default": 0.40, "step": 0.01, "unit": "%"},
+            {"key": "warmth", "label": "Warmth", "type": "float", "min": 0.0, "max": 1.0, "default": 0.45, "step": 0.01, "unit": "%"},
+            {"key": "drift", "label": "Drift", "type": "float", "min": 0.0, "max": 1.0, "default": 0.35, "step": 0.01, "unit": "%"},
+            {"key": "sustain", "label": "Sustain", "type": "float", "min": 0.0, "max": 1.0, "default": 0.50, "step": 0.01, "unit": "%"},
+            {"key": "scatter", "label": "Scatter", "type": "float", "min": 0.0, "max": 1.0, "default": 0.40, "step": 0.01, "unit": "%"},
+            {"key": "mix", "label": "Mix", "type": "float", "min": 0.0, "max": 1.0, "default": 0.60, "step": 0.01, "unit": "%"}
           ],
-          "knobs": ["activity", "repeats", "mix", "space", "filter", "shape", "pitch_mod_depth", "filter_res"]
-        },
-        "advanced": {
-          "name": "Advanced",
-          "params": [
-            {"key": "shape", "label": "Shape", "type": "float", "min": 0.0, "max": 1.0, "default": 0.95, "step": 0.01, "unit": "%"},
-            {"key": "time_div", "label": "Time Div", "type": "enum", "options": ["1/4","1/2","1x","2x","4x","8x"], "default": "1x"},
-            {"key": "reverb_mode", "label": "Reverb", "type": "enum", "options": ["Bright","Dark","Hall","Ambient"], "default": "Bright"},
-            {"key": "pitch_mod_depth", "label": "Mod Depth", "type": "float", "min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01, "unit": "%"},
-            {"key": "pitch_mod_rate", "label": "Mod Rate", "type": "float", "min": 0.0, "max": 1.0, "default": 0.3, "step": 0.01, "unit": "%"},
-            {"key": "filter_res", "label": "Resonance", "type": "float", "min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01, "unit": "%"},
-            {"key": "reverse", "label": "Reverse", "type": "enum", "options": ["Off","On"], "default": "Off"},
-            {"key": "hold", "label": "Hold", "type": "enum", "options": ["Off","On"], "default": "Off"}
-          ],
-          "knobs": ["shape", "pitch_mod_depth", "pitch_mod_rate", "filter_res", "activity", "repeats", "mix", "space"]
+          "knobs": ["space", "shimmer", "smear", "warmth", "drift", "sustain", "scatter", "mix"]
         }
       }
     }

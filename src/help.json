@@ -1,19 +1,12 @@
 {
   "parameters": {
-    "algorithm": "Choose the effect type: Mosaic (shimmer loops), Seq (shuffled rhythms), Glide (pitch sweep), Haze (granular wash), Tunnel (drone), Strum (onset cascade), Blocks (stutter), Interrupt (glitch bursts), Arp (arpeggiation), Pattern (multi-tap delay), Warp (pitched delay)",
-    "variation": "Each algorithm has 4 flavors (A-D) that change its character",
-    "activity": "How much the effect does — sparse and delicate at low, dense and immersive at high",
-    "repeats": "How long the effect rings — short events at low, sustained wash at high",
-    "mix": "Blend between your dry signal and the effect",
-    "space": "How much reverb — intimate at low, cathedral at high",
-    "filter": "Brightness — dark and warm at low, open and airy at high",
-    "shape": "Rhythmic gating of the wet signal — Square / Ramp / Triangle / Saw zones. Fully clockwise = off",
-    "time_div": "Musical tempo subdivision — affects grain lengths and delay times",
-    "reverb_mode": "Reverb character — Bright (tight), Dark (warm), Hall (spacious), Ambient (massive with shimmer)",
-    "pitch_mod_depth": "Gentle pitch wobble for chorus-like warmth — subtle at low, dramatic at high",
-    "pitch_mod_rate": "Speed of the pitch wobble",
-    "filter_res": "Filter resonance — adds emphasis at the cutoff frequency",
-    "reverse": "Reverse grain playback — softens attacks and smears time",
-    "hold": "Freeze and loop the current sound through the effect — creates evolving textures from a single moment"
+    "space": "Size of the world — intimate room at low, infinite cathedral at high",
+    "shimmer": "Crystalline sparkle — natural reverb at low, cascading harmonics at high",
+    "smear": "Time blurring — sharp attacks at low, everything dissolves into texture at high",
+    "warmth": "Tonal color — bright and airy at low, dark and amber at high",
+    "drift": "Evolving movement — still and frozen at low, slowly breathing at high",
+    "sustain": "How long things ring — short events at low, infinite at high",
+    "scatter": "Spatial spread — focused mono at low, wide stereo field at high",
+    "mix": "Blend between dry signal and effect"
   }
 }
