@@ -335,14 +335,24 @@ typedef struct {
     int pending_algorithm;
     int pending_variation;
 
-    /* Transient-triggered grain scatter — wind chime behavior */
-    float scatter_energy;       /* fast energy tracker */
-    float scatter_energy_slow;  /* slow average for adaptive threshold */
-    int scatter_remaining;      /* grains left in current scatter */
-    int scatter_timer;          /* samples until next grain */
-    int scatter_interval;       /* current interval (grows each grain) */
-    int scatter_origin;         /* capture buffer position of the transient */
-    int scatter_debounce;       /* prevent re-triggering */
+    /* Transient-triggered grain scatter — multi-wave wind chime.
+       Each transient triggers multiple overlapping waves of grains,
+       each wave starting later and sparser than the previous. */
+    float scatter_energy;
+    float scatter_energy_slow;
+    int scatter_origin;
+    int scatter_debounce;
+
+    /* Up to 4 overlapping scatter waves, each at different density */
+    #define MAX_SCATTER_WAVES 4
+    struct {
+        int active;
+        int remaining;
+        int timer;
+        int interval;
+        int total;          /* how many grains this wave started with */
+        float amp_scale;    /* amplitude multiplier for this wave */
+    } scatter_waves[4];
 
     /* MIDI clock */
     uint32_t midi_clock_tick_count;
@@ -1488,11 +1498,14 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
         tunnel_tick(inst);
     }
 
-    /* === TRANSIENT-TRIGGERED GRAIN SCATTER ===
-       When a signal arrives (energy rises), fire a burst of grains that
-       get farther apart over time. Like throwing crystals — dense at first,
-       then sparser and sparser, each ringing through the reverb.
-       Sustain controls how many grains and how far apart they spread. */
+    /* === MULTI-WAVE GRAIN SCATTER ===
+       Each transient launches 4 overlapping waves of grains.
+       Wave 0: dense, starts immediately (the splash)
+       Wave 1: medium density, starts after ~200ms
+       Wave 2: sparser, starts after ~800ms
+       Wave 3: very sparse, starts after ~2s
+       Together they create a grain tail that stays full for a long time
+       then gradually thins — like a real reverb tail but made of grains. */
 
     int wp = inst->capture.write_pos;
     float sample_l = inst->capture.buffer[(wp - 1 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES].l;
@@ -1503,70 +1516,104 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
 
     if (inst->scatter_debounce > 0) inst->scatter_debounce--;
 
-    /* Detect transient */
+    /* Detect transient → launch 4 scatter waves */
     if (inst->scatter_debounce == 0 &&
         inst->scatter_energy > inst->scatter_energy_slow * 3.0f + 0.001f &&
         inst->scatter_energy > 0.001f) {
-        /* New scatter burst: 10 to 32 grains based on sustain */
-        inst->scatter_remaining = 10 + (int)(inst->sustain * 22.0f);
-        inst->scatter_origin = (wp - 441 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-        inst->scatter_timer = 0;
-        inst->scatter_interval = 220;  /* first trailing grain after ~5ms */
-        inst->scatter_debounce = 4410; /* ~100ms between bursts — responsive */
 
-        /* Fire 2-5 grains immediately — the initial splash */
+        inst->scatter_origin = (wp - 441 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+        inst->scatter_debounce = 4410;
+
+        /* Wave 0: dense splash, starts now */
+        inst->scatter_waves[0].active = 1;
+        inst->scatter_waves[0].remaining = 8 + (int)(inst->sustain * 8.0f);
+        inst->scatter_waves[0].total = inst->scatter_waves[0].remaining;
+        inst->scatter_waves[0].timer = 0;
+        inst->scatter_waves[0].interval = 220;
+        inst->scatter_waves[0].amp_scale = 0.7f;
+
+        /* Wave 1: medium, starts after ~200ms */
+        inst->scatter_waves[1].active = 1;
+        inst->scatter_waves[1].remaining = 6 + (int)(inst->sustain * 8.0f);
+        inst->scatter_waves[1].total = inst->scatter_waves[1].remaining;
+        inst->scatter_waves[1].timer = -8820;  /* negative = delayed start */
+        inst->scatter_waves[1].interval = 882;
+        inst->scatter_waves[1].amp_scale = 0.5f;
+
+        /* Wave 2: sparse, starts after ~800ms */
+        inst->scatter_waves[2].active = 1;
+        inst->scatter_waves[2].remaining = 4 + (int)(inst->sustain * 6.0f);
+        inst->scatter_waves[2].total = inst->scatter_waves[2].remaining;
+        inst->scatter_waves[2].timer = -35280;
+        inst->scatter_waves[2].interval = 4410;
+        inst->scatter_waves[2].amp_scale = 0.35f;
+
+        /* Wave 3: very sparse tail, starts after ~2s */
+        inst->scatter_waves[3].active = 1;
+        inst->scatter_waves[3].remaining = 3 + (int)(inst->sustain * 5.0f);
+        inst->scatter_waves[3].total = inst->scatter_waves[3].remaining;
+        inst->scatter_waves[3].timer = -88200;
+        inst->scatter_waves[3].interval = 11025;
+        inst->scatter_waves[3].amp_scale = 0.25f;
+
+        /* Immediate splash from wave 0 */
         int immediate = 2 + (int)(inst->scatter * 3.0f);
-        for (int g = 0; g < immediate && inst->scatter_remaining > 0; g++) {
+        for (int g = 0; g < immediate && inst->scatter_waves[0].remaining > 0; g++) {
             float speed = rng_float(&inst->rng_state) < 0.5f ? 1.0f : 2.0f;
-            if (inst->shimmer > 0.3f && rng_float(&inst->rng_state) < inst->shimmer)
-                speed = 2.0f;
-            int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
+            if (inst->shimmer > 0.3f) speed = 2.0f;
             float len_ms = 20.0f + inst->smear * 60.0f + rng_float(&inst->rng_state) * 20.0f;
-            {
-                grain_t *g = find_free_grain(inst);
-                if (g) {
-                    int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
-                    int start = (inst->scatter_origin + offset) % CAPTURE_SAMPLES;
-                    int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
-                    if (len < 128) len = 128;
-                    init_grain_common(g, inst, start, len, speed);
-                    g->amplitude = 0.5f + inst->sustain * 0.3f;
-                }
+            grain_t *gr = find_free_grain(inst);
+            if (gr) {
+                int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
+                int start = (inst->scatter_origin + offset) % CAPTURE_SAMPLES;
+                int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
+                if (len < 128) len = 128;
+                init_grain_common(gr, inst, start, len, speed);
+                gr->amplitude = 0.5f + inst->sustain * 0.3f;
             }
-            inst->scatter_remaining--;
+            inst->scatter_waves[0].remaining--;
         }
     }
 
-    /* Continue active scatter: grains at increasing intervals */
-    if (inst->scatter_remaining > 0) {
-        inst->scatter_timer++;
-        if (inst->scatter_timer >= inst->scatter_interval) {
-            inst->scatter_timer = 0;
-            /* Interval grows gently — stays dense longer before spreading */
-            inst->scatter_interval = (int)((float)inst->scatter_interval * (1.08f + inst->sustain * 0.12f));
-            if (inst->scatter_interval > 88200) inst->scatter_interval = 88200;
+    /* Process all active scatter waves */
+    for (int w = 0; w < MAX_SCATTER_WAVES; w++) {
+        if (!inst->scatter_waves[w].active || inst->scatter_waves[w].remaining <= 0) {
+            inst->scatter_waves[w].active = 0;
+            continue;
+        }
+
+        inst->scatter_waves[w].timer++;
+        if (inst->scatter_waves[w].timer < 0) continue;  /* delayed start */
+
+        if (inst->scatter_waves[w].timer >= inst->scatter_waves[w].interval) {
+            inst->scatter_waves[w].timer = 0;
+
+            /* Interval grows per grain */
+            inst->scatter_waves[w].interval = (int)((float)inst->scatter_waves[w].interval * (1.1f + inst->sustain * 0.15f));
+            if (inst->scatter_waves[w].interval > 88200) inst->scatter_waves[w].interval = 88200;
 
             float speed = rng_float(&inst->rng_state) < 0.4f ? 1.0f : 2.0f;
             if (inst->shimmer > 0.3f && rng_float(&inst->rng_state) < inst->shimmer)
                 speed = (rng_float(&inst->rng_state) < 0.5f) ? 2.0f : 4.0f;
 
-            /* Later grains gently quieter — slow decay for full chime */
-            int fired = (10 + (int)(inst->sustain * 22.0f)) - inst->scatter_remaining;
-            float decay = 1.0f / (1.0f + (float)fired * 0.04f);
+            int fired = inst->scatter_waves[w].total - inst->scatter_waves[w].remaining;
+            float decay = 1.0f / (1.0f + (float)fired * 0.05f);
+            float amp = (0.5f + inst->sustain * 0.3f) * inst->scatter_waves[w].amp_scale * decay;
             float len_ms = 20.0f + inst->smear * 60.0f + rng_float(&inst->rng_state) * 30.0f;
-            {
-                grain_t *g = find_free_grain(inst);
-                if (g) {
-                    int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
-                    int start = (inst->scatter_origin + offset) % CAPTURE_SAMPLES;
-                    int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
-                    if (len < 128) len = 128;
-                    init_grain_common(g, inst, start, len, speed);
-                    g->amplitude = (0.5f + inst->sustain * 0.3f) * decay;
-                }
+
+            grain_t *gr = find_free_grain(inst);
+            if (gr) {
+                int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
+                int start = (inst->scatter_origin + offset) % CAPTURE_SAMPLES;
+                int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
+                if (len < 128) len = 128;
+                init_grain_common(gr, inst, start, len, speed);
+                gr->amplitude = amp;
             }
 
-            inst->scatter_remaining--;
+            inst->scatter_waves[w].remaining--;
+            if (inst->scatter_waves[w].remaining <= 0)
+                inst->scatter_waves[w].active = 0;
         }
     }
 }
