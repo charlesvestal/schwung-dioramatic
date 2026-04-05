@@ -1507,15 +1507,15 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
     if (inst->scatter_debounce == 0 &&
         inst->scatter_energy > inst->scatter_energy_slow * 3.0f + 0.001f &&
         inst->scatter_energy > 0.001f) {
-        /* New scatter burst: 5 to 20 grains based on sustain */
-        inst->scatter_remaining = 5 + (int)(inst->sustain * 15.0f);
+        /* New scatter burst: 10 to 32 grains based on sustain */
+        inst->scatter_remaining = 10 + (int)(inst->sustain * 22.0f);
         inst->scatter_origin = (wp - 441 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
         inst->scatter_timer = 0;
-        inst->scatter_interval = 441;  /* first trailing grain after ~10ms */
-        inst->scatter_debounce = 8820; /* ~200ms between bursts */
+        inst->scatter_interval = 220;  /* first trailing grain after ~5ms */
+        inst->scatter_debounce = 4410; /* ~100ms between bursts — responsive */
 
-        /* Fire 1-3 grains immediately — the initial splash */
-        int immediate = 1 + (int)(inst->scatter * 2.0f);
+        /* Fire 2-5 grains immediately — the initial splash */
+        int immediate = 2 + (int)(inst->scatter * 3.0f);
         for (int g = 0; g < immediate && inst->scatter_remaining > 0; g++) {
             float speed = rng_float(&inst->rng_state) < 0.5f ? 1.0f : 2.0f;
             if (inst->shimmer > 0.3f && rng_float(&inst->rng_state) < inst->shimmer)
@@ -1542,17 +1542,17 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
         inst->scatter_timer++;
         if (inst->scatter_timer >= inst->scatter_interval) {
             inst->scatter_timer = 0;
-            /* Interval grows — each grain further apart */
-            inst->scatter_interval = (int)((float)inst->scatter_interval * (1.2f + inst->sustain * 0.3f));
+            /* Interval grows gently — stays dense longer before spreading */
+            inst->scatter_interval = (int)((float)inst->scatter_interval * (1.08f + inst->sustain * 0.12f));
             if (inst->scatter_interval > 88200) inst->scatter_interval = 88200;
 
             float speed = rng_float(&inst->rng_state) < 0.4f ? 1.0f : 2.0f;
             if (inst->shimmer > 0.3f && rng_float(&inst->rng_state) < inst->shimmer)
                 speed = (rng_float(&inst->rng_state) < 0.5f) ? 2.0f : 4.0f;
 
-            /* Later grains slightly quieter */
-            int fired = (5 + (int)(inst->sustain * 15.0f)) - inst->scatter_remaining;
-            float decay = 1.0f / (1.0f + (float)fired * 0.08f);
+            /* Later grains gently quieter — slow decay for full chime */
+            int fired = (10 + (int)(inst->sustain * 22.0f)) - inst->scatter_remaining;
+            float decay = 1.0f / (1.0f + (float)fired * 0.04f);
             float len_ms = 20.0f + inst->smear * 60.0f + rng_float(&inst->rng_state) * 30.0f;
             {
                 grain_t *g = find_free_grain(inst);
