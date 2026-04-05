@@ -112,7 +112,7 @@ const revSend=.3+this.space*.7;
 /* Reverb presets: [feedback, damping, shimmer_amount] per mode */
 const presets=[[.72,.25,.05],[.80,.65,.07],[.88,.45,.10],[.95,.55,.14]];
 const pFb=presets[mode][0],pDmp=presets[mode][1],shimAmt=presets[mode][2];
-const effFb=Math.min(.998,pFb+this.sustain*(.998-pFb));
+const effFb=Math.min(.998,pFb+this.sustain*.75*(.998-pFb));
 const cut=Math.min(20000,200*Math.pow(100,1-this.warmth));
 const sg=Math.tan(Math.PI*cut/S),sk=2-.19;
 const a1=1/(1+sg*(sg+sk)),a2=sg*a1,a3=sg*a2;

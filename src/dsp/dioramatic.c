@@ -511,7 +511,9 @@ static inline float svf_lowpass(svf_state_t *s, const dioramatic_instance_t *ins
 static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, float *out_l, float *out_r, float sustain_boost) {
     const reverb_preset_t *p = &reverb_presets[mode];
     /* Sustain boost: raise feedback beyond the preset value toward 0.998 */
-    float effective_feedback = p->feedback + sustain_boost * (0.998f - p->feedback);
+    /* Cap sustain boost at 0.75 — prevents runaway at extreme settings */
+    float capped_boost = sustain_boost * 0.75f;
+    float effective_feedback = p->feedback + capped_boost * (0.998f - p->feedback);
 
     /* Pre-delay */
     float pd_l, pd_r;
