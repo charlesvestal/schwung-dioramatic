@@ -370,7 +370,7 @@ int main(void) {
     /* Unified effect — 8 musical knobs sweeping through the parameter space */
     preset_t presets[] = {
         {"default",
-         "{\"space\":0.60,\"shimmer\":0.35,\"smear\":0.40,\"warmth\":0.40,\"drift\":0.35,\"sustain\":0.70,\"scatter\":0.40,\"mix\":0.65}"},
+         "{\"space\":0.65,\"shimmer\":0.35,\"smear\":0.40,\"warmth\":0.40,\"drift\":0.35,\"sustain\":0.75,\"scatter\":0.40,\"mix\":0.70}"},
         {"sparse-sparkle",
          "{\"space\":0.75,\"shimmer\":0.50,\"smear\":0.10,\"warmth\":0.35,\"drift\":0.25,\"sustain\":0.80,\"scatter\":0.50,\"mix\":0.75}"},
         {"dense-wash",
@@ -378,13 +378,13 @@ int main(void) {
         {"crystal-cave",
          "{\"space\":0.85,\"shimmer\":0.65,\"smear\":0.30,\"warmth\":0.25,\"drift\":0.40,\"sustain\":0.80,\"scatter\":0.60,\"mix\":0.75}"},
         {"warm-amber",
-         "{\"space\":0.65,\"shimmer\":0.25,\"smear\":0.50,\"warmth\":0.70,\"drift\":0.30,\"sustain\":0.75,\"scatter\":0.35,\"mix\":0.70}"},
+         "{\"space\":0.70,\"shimmer\":0.25,\"smear\":0.50,\"warmth\":0.70,\"drift\":0.30,\"sustain\":0.80,\"scatter\":0.35,\"mix\":0.70}"},
         {"bright-air",
          "{\"space\":0.70,\"shimmer\":0.45,\"smear\":0.35,\"warmth\":0.10,\"drift\":0.35,\"sustain\":0.75,\"scatter\":0.55,\"mix\":0.70}"},
         {"infinite-drift",
          "{\"space\":0.90,\"shimmer\":0.50,\"smear\":0.60,\"warmth\":0.40,\"drift\":0.80,\"sustain\":0.95,\"scatter\":0.60,\"mix\":0.85}"},
         {"tight-shimmer",
-         "{\"space\":0.30,\"shimmer\":0.60,\"smear\":0.20,\"warmth\":0.30,\"drift\":0.20,\"sustain\":0.60,\"scatter\":0.30,\"mix\":0.60}"},
+         "{\"space\":0.35,\"shimmer\":0.60,\"smear\":0.20,\"warmth\":0.30,\"drift\":0.20,\"sustain\":0.70,\"scatter\":0.30,\"mix\":0.60}"},
     };
 
     int num_presets = sizeof(presets) / sizeof(presets[0]);
