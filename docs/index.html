@@ -56,13 +56,16 @@ button:focus-visible,input:focus-visible{outline:2px solid #8080e0;outline-offse
 <div class="k"><label>Scatter</label><span class="h">few &rarr; many</span><input type="range" id="k-scatter" min="0" max="100" value="40"><div class="v" id="v-scatter">40</div></div>
 <div class="k"><label>Mix</label><span class="h">dry &rarr; wet</span><input type="range" id="k-mix" min="0" max="100" value="60"><div class="v" id="v-mix">60</div></div>
 </div>
+<div class="ctrls" style="grid-template-columns:1fr;max-width:640px">
+<div class="k" style="background:#1a1228"><label>Grain Tail</label><span class="h">grains die fast &rarr; grains ring forever</span><input type="range" id="k-graintail" min="0" max="100" value="50"><div class="v" id="v-graintail">50</div></div>
+</div>
 <div class="st" id="status" role="status" aria-live="polite">Click a source to begin</div>
 <script>
 const P=`
 class D extends AudioWorkletProcessor{
 constructor(){super();const S=sampleRate;this.S=S;
 this.space=.55;this.shimmer=.35;this.smear=.4;this.warmth=.45;
-this.drift=.35;this.sustain=.5;this.scatter=.4;this.mix=.6;
+this.drift=.35;this.sustain=.5;this.scatter=.4;this.mix=.6;this.graintail=.5;
 /* 12-second capture buffer */
 this.capSize=Math.floor(S*12);this.capL=new Float32Array(this.capSize);
 this.capR=new Float32Array(this.capSize);this.capPos=0;
@@ -85,9 +88,10 @@ this.lfoP=0;
 this.hazeC1=0;this.hazeC2=0;
 /* Mosaic counter */
 this.mosC=0;
+this.prevWL=0;this.prevWR=0;
 this.rng=12345;this.pk=0;this.mc=0;
 this.port.onmessage=e=>{const p=e.data;
-for(const k of['space','shimmer','smear','warmth','drift','sustain','scatter','mix'])
+for(const k of['space','shimmer','smear','warmth','drift','sustain','scatter','mix','graintail'])
 if(p[k]!==undefined)this[k]=p[k]};
 }
 R(){this.rng=(this.rng*1664525+1013904223)&0xFFFFFFFF;return(this.rng>>>8)/16777216}
@@ -121,7 +125,11 @@ const mosInt=this.scatter>.05?Math.max(128,Math.floor(22050/(3+this.scatter*6)))
 const chimePPS=2+this.scatter*10;const chimeProb=chimePPS/S;
 for(let i=0;i<F;i++){
 const dL=iL[i]*.7,dR=iR[i]*.7;
-this.capL[this.capPos]=dL;this.capR[this.capPos]=dR;
+/* Grain tail: feed wet back into capture so grains keep finding audio.
+   At 0: grains only read dry input. At 1: grains read dry+wet, ringing forever. */
+const gtFb=this.graintail*this.graintail*0.15;
+this.capL[this.capPos]=dL+this.prevWL*gtFb;
+this.capR[this.capPos]=dR+this.prevWR*gtFb;
 this.capPos=(this.capPos+1)%CS;
 /* LFO */
 const lfo=Math.sin(2*Math.PI*this.lfoP);
@@ -215,7 +223,7 @@ fb+=shimOut*shimAmt;
 if(fb>.6||fb<-.6)fb=Math.tanh(fb)*.95;
 this.L[l][this.LP[l]]=df+fb;this.LP[l]=(this.LP[l]+1)&NM}
 wL+=(tp[0]+tp[2])*.45*revSend;wR+=(tp[1]+tp[3])*.45*revSend}
-/* Mix + tanh */
+this.prevWL=wL;this.prevWR=wR;
 let xL=dL*(1-this.mix)+wL*this.mix;let xR=dR*(1-this.mix)+wR*this.mix;
 oL[i]=Math.tanh(xL*1.5)*.667;oR[i]=Math.tanh(xR*1.5)*.667;
 const lv=Math.abs(oL[i])>Math.abs(oR[i])?Math.abs(oL[i]):Math.abs(oR[i]);
