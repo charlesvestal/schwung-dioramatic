@@ -99,6 +99,8 @@ typedef struct {
     float env_target;
     float env_rate;
     int active;
+    int waveform;     /* 0=saw+square, 1=pure sine, 2=triangle, 3=filtered saw (mellow) */
+    float lp_state;   /* one-pole filter for mellow timbres */
 } voice_t;
 
 #define MAX_VOICES 6
@@ -146,19 +148,35 @@ static float synth_tick(synth_t *s) {
         if (!v->active) continue;
 
         float dt = v->freq / 44100.0f;
+        float sample = 0.0f;
 
-        /* Sawtooth with polyBLEP */
-        float saw = 2.0f * v->phase - 1.0f;
-        saw -= polyblep(v->phase, dt);
+        switch (v->waveform) {
+            case 0: { /* Saw + square — bright, rich harmonics */
+                float saw = 2.0f * v->phase - 1.0f;
+                saw -= polyblep(v->phase, dt);
+                float sq = (v->phase < 0.5f) ? 1.0f : -1.0f;
+                float phase2 = fmodf(v->phase + 0.5f, 1.0f);
+                sq += polyblep(v->phase, dt);
+                sq -= polyblep(phase2, dt);
+                sample = saw * 0.6f + sq * 0.3f;
+                break;
+            }
+            case 1: /* Pure sine — clean, bell-like */
+                sample = sinf(2.0f * (float)M_PI * v->phase);
+                break;
+            case 2: /* Triangle — soft, flute-like */
+                sample = (v->phase < 0.5f) ? (4.0f * v->phase - 1.0f) : (3.0f - 4.0f * v->phase);
+                break;
+            case 3: { /* Filtered saw — mellow, guitar-like */
+                float saw = 2.0f * v->phase - 1.0f;
+                saw -= polyblep(v->phase, dt);
+                v->lp_state += 0.15f * (saw - v->lp_state);
+                sample = v->lp_state;
+                break;
+            }
+        }
 
-        /* Add a softer square component for warmth */
-        float sq = (v->phase < 0.5f) ? 1.0f : -1.0f;
-        /* polyBLEP for square edges */
-        float phase2 = fmodf(v->phase + 0.5f, 1.0f);
-        sq += polyblep(v->phase, dt);
-        sq -= polyblep(phase2, dt);
-
-        out += (saw * 0.6f + sq * 0.3f) * v->amp_env;
+        out += sample * v->amp_env;
 
         v->phase += dt;
         if (v->phase >= 1.0f) v->phase -= 1.0f;
@@ -203,7 +221,7 @@ static void generate_soft_piano(int16_t *buf, int total_frames) {
             synth_note_off_all(&synth);
             for (int n = 0; n < 4; n++) {
                 synth_note_on(&synth, chords[chord_idx][n], 0.2f);
-                /* Softer attack for piano-like quality */
+                synth.voices[n].waveform = 3;  /* filtered saw — mellow piano-like */
                 synth.voices[n].env_rate = 0.003f;
             }
         }
@@ -254,6 +272,7 @@ static void generate_arp_input(int16_t *buf, int total_frames) {
             else
                 note = am_arp[eighth % 8];
             synth_note_on(&synth, note, 0.3f);
+            synth.voices[0].waveform = 0;  /* bright saw — synth arp */
         }
 
         float sample = synth_tick(&synth);
@@ -263,6 +282,116 @@ static void generate_arp_input(int16_t *buf, int total_frames) {
         int16_t s = (int16_t)(sample * 32767.0f);
         buf[i * 2] = s;
         buf[i * 2 + 1] = s;
+    }
+}
+
+/*
+ * Input C: Slow melody — single notes with long sustain, like a guitar solo.
+ */
+static void generate_slow_melody(int16_t *buf, int total_frames) {
+    synth_t synth;
+    synth_init(&synth);
+    int beat = 44100 * 60 / 72;  /* 72 BPM, slow */
+    int melody[] = {64, 67, 72, 71, 69, 67, 64, 60, 62, 64, 67, 69, 72, 76, 74, 72};
+
+    for (int i = 0; i < total_frames; i++) {
+        int note_period = beat;  /* one note per beat */
+        int pos = i % note_period;
+        int note_idx = (i / note_period) % 16;
+
+        if (pos == 0) {
+            synth_note_off_all(&synth);
+            synth_note_on(&synth, melody[note_idx], 0.3f);
+            synth.voices[0].waveform = 1;  /* pure sine — bell-like melody */
+            synth.voices[0].env_rate = 0.001f;
+        }
+        if (pos == note_period * 3 / 4) {
+            synth_note_off_all(&synth);
+            for (int v = 0; v < MAX_VOICES; v++)
+                if (synth.voices[v].active) synth.voices[v].env_rate = 0.0004f;
+        }
+        float sample = synth_tick(&synth);
+        if (sample > 0.8f) sample = 0.8f;
+        if (sample < -0.8f) sample = -0.8f;
+        buf[i*2] = buf[i*2+1] = (int16_t)(sample * 32767.0f);
+    }
+}
+
+/*
+ * Input D: Single sustained chord — plays once and holds for the full duration.
+ * Tests how the effect handles a single event ringing out.
+ */
+static void generate_single_chord(int16_t *buf, int total_frames) {
+    synth_t synth;
+    synth_init(&synth);
+    int chord[] = {60, 64, 67, 72, 76};  /* Cmaj9 */
+
+    for (int i = 0; i < total_frames; i++) {
+        if (i == 0) {
+            for (int n = 0; n < 5; n++) {
+                synth_note_on(&synth, chord[n], 0.2f);
+                synth.voices[n].waveform = 2;  /* triangle — soft pad */
+                synth.voices[n].env_rate = 0.0005f;
+            }
+        }
+        /* Release after 3 seconds */
+        if (i == 44100 * 3) {
+            synth_note_off_all(&synth);
+            for (int v = 0; v < MAX_VOICES; v++)
+                if (synth.voices[v].active) synth.voices[v].env_rate = 0.0002f;
+        }
+        float sample = synth_tick(&synth);
+        if (sample > 0.7f) sample = 0.7f;
+        if (sample < -0.7f) sample = -0.7f;
+        buf[i*2] = buf[i*2+1] = (int16_t)(sample * 32767.0f);
+    }
+}
+
+/*
+ * Input E: Rhythmic stabs — short percussive hits with silence between.
+ * Tests how the effect handles transients and the space between them.
+ */
+static void generate_stabs(int16_t *buf, int total_frames) {
+    synth_t synth;
+    synth_init(&synth);
+    int beat = 44100 * 60 / 110;  /* 110 BPM */
+    int chords[4][3] = {
+        {48, 60, 67},  /* C5 power chord low */
+        {53, 60, 65},  /* F */
+        {55, 62, 67},  /* G */
+        {52, 57, 64},  /* Em */
+    };
+    /* Rhythm: hit on beats 1, 2-and, 4 */
+    int hits[] = {0, 3, 7};  /* in 8th notes */
+
+    for (int i = 0; i < total_frames; i++) {
+        int bar_len = beat * 4;
+        int pos_in_bar = i % bar_len;
+        int eighth = pos_in_bar / (beat / 2);
+        int pos_in_eighth = pos_in_bar % (beat / 2);
+        int bar = (i / bar_len) % 4;
+
+        int is_hit = 0;
+        for (int h = 0; h < 3; h++) if (eighth == hits[h]) is_hit = 1;
+
+        if (is_hit && pos_in_eighth == 0) {
+            synth_note_off_all(&synth);
+            for (int n = 0; n < 3; n++) {
+                synth_note_on(&synth, chords[bar][n], 0.35f);
+                synth.voices[n].waveform = 0;  /* bright saw — punchy stabs */
+                synth.voices[n].env_rate = 0.01f;
+            }
+        }
+        /* Quick release after 1/8 of a beat */
+        if (is_hit && pos_in_eighth == beat / 16) {
+            synth_note_off_all(&synth);
+            for (int v = 0; v < MAX_VOICES; v++)
+                if (synth.voices[v].active) synth.voices[v].env_rate = 0.002f;
+        }
+        float sample = synth_tick(&synth);
+        if (sample > 0.9f) sample = 0.9f;
+        if (sample < -0.9f) sample = -0.9f;
+        buf[i*2] = buf[i*2+1] = (int16_t)(sample * 32767.0f);
     }
 }
 
@@ -338,23 +467,25 @@ int main(void) {
     int tail_frames = 44100 * tail_sec;
     int total_frames = input_frames + tail_frames;
 
-    /* Generate both input types */
-    int16_t *piano_input = (int16_t *)malloc(input_frames * 2 * sizeof(int16_t));
-    int16_t *arp_input = (int16_t *)malloc(input_frames * 2 * sizeof(int16_t));
+    /* Generate all input types */
+    #define NUM_INPUTS 5
+    int16_t *inputs[NUM_INPUTS];
+    const char *input_names[NUM_INPUTS] = {"piano", "arp", "melody", "chord", "stabs"};
+    for (int i = 0; i < NUM_INPUTS; i++)
+        inputs[i] = (int16_t *)malloc(input_frames * 2 * sizeof(int16_t));
 
-    printf("Generating soft piano input (%ds)...\n", input_sec);
-    generate_soft_piano(piano_input, input_frames);
-    printf("Generating arp input (%ds)...\n", input_sec);
-    generate_arp_input(arp_input, input_frames);
+    printf("Generating inputs (%ds each)...\n", input_sec);
+    generate_soft_piano(inputs[0], input_frames);
+    generate_arp_input(inputs[1], input_frames);
+    generate_slow_melody(inputs[2], input_frames);
+    generate_single_chord(inputs[3], input_frames);
+    generate_stabs(inputs[4], input_frames);
 
     /* Save dry inputs */
-    {
+    for (int i = 0; i < NUM_INPUTS; i++) {
         char path[512];
-        snprintf(path, sizeof(path), "%s/00-dry-piano.wav", output_dir);
-        write_wav(path, piano_input, input_frames * 2);
-        printf("  Wrote: %s\n", path);
-        snprintf(path, sizeof(path), "%s/00-dry-arp.wav", output_dir);
-        write_wav(path, arp_input, input_frames * 2);
+        snprintf(path, sizeof(path), "%s/00-dry-%s.wav", output_dir, input_names[i]);
+        write_wav(path, inputs[i], input_frames * 2);
         printf("  Wrote: %s\n", path);
     }
 
@@ -389,26 +520,21 @@ int main(void) {
 
     int num_presets = sizeof(presets) / sizeof(presets[0]);
 
-    /* Render each preset with both inputs */
-    printf("\nRendering %d presets x 2 inputs (%ds + %ds tail)...\n\n", num_presets, input_sec, tail_sec);
+    /* Render each preset with all inputs */
+    printf("\nRendering %d presets x %d inputs (%ds + %ds tail)...\n\n",
+           num_presets, NUM_INPUTS, input_sec, tail_sec);
 
     for (int i = 0; i < num_presets; i++) {
-        /* Piano version */
-        char piano_name[128];
-        snprintf(piano_name, sizeof(piano_name), "%02d-piano-%s", i + 1, presets[i].name);
-        preset_t piano_preset = { piano_name, presets[i].state };
-        render_preset(api, &piano_preset, piano_input, input_frames, tail_frames, output_dir);
-
-        /* Arp version */
-        char arp_name[128];
-        snprintf(arp_name, sizeof(arp_name), "%02d-arp-%s", i + 1, presets[i].name);
-        preset_t arp_preset = { arp_name, presets[i].state };
-        render_preset(api, &arp_preset, arp_input, input_frames, tail_frames, output_dir);
+        for (int j = 0; j < NUM_INPUTS; j++) {
+            char name[128];
+            snprintf(name, sizeof(name), "%02d-%s-%s", i + 1, input_names[j], presets[i].name);
+            preset_t p = { name, presets[i].state };
+            render_preset(api, &p, inputs[j], input_frames, tail_frames, output_dir);
+        }
     }
 
-    printf("\nDone! %d WAV files saved to %s\n", num_presets * 2 + 2, output_dir);
+    printf("\nDone! %d WAV files saved to %s\n", num_presets * NUM_INPUTS + NUM_INPUTS, output_dir);
 
-    free(piano_input);
-    free(arp_input);
+    for (int i = 0; i < NUM_INPUTS; i++) free(inputs[i]);
     return 0;
 }

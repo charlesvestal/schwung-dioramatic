@@ -1530,13 +1530,11 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
             float len_ms = 15.0f + inst->smear * 80.0f + rng_float(&inst->rng_state) * 20.0f;
 
             /* Read from recent capture buffer */
-            /* Read from 200ms to up to 10 seconds ago, scaled by sustain.
-               Higher sustain = grains reach further into the past = longer sparkle tail.
-               The random distribution is weighted toward more recent audio. */
-            float max_reach = 0.5f + inst->sustain * 9.5f;  /* 0.5s to 10s */
-            float r2 = rng_float(&inst->rng_state);
-            /* Weighted toward recent: square the random for more recent bias */
-            float reach = 0.2f + r2 * r2 * max_reach;
+            /* Read from anywhere in the capture buffer, evenly spread.
+               Sustain controls how far back. Grains are scattered across
+               the full history — NOT biased toward recent. */
+            float max_reach = 0.5f + inst->sustain * 10.0f;  /* 0.5s to 10.5s */
+            float reach = 0.1f + rng_float(&inst->rng_state) * max_reach;
             int recent = (int)(SAMPLE_RATE * reach);
             if (recent >= CAPTURE_SAMPLES) recent = CAPTURE_SAMPLES - 1;
             int start = (wp - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
