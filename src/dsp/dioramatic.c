@@ -595,7 +595,7 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
 
     /* Shimmer: low levels prevent runaway — even small amounts cascade
        into rich harmonics because the reverb feedback is already high */
-    static const float shimmer_amounts[4] = {0.03f, 0.04f, 0.06f, 0.08f};
+    static const float shimmer_amounts[4] = {0.05f, 0.07f, 0.10f, 0.14f};
     float shimmer_level = shimmer_amounts[mode];
 
     /* Apply feedback, damping, shimmer injection, and write back */
@@ -606,9 +606,9 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         fb = rev->lp_state[i];
         /* Inject shimmer — cascading crystalline harmonics */
         fb += shimmer_out * shimmer_level;
-        /* Safety limiter prevents runaway buildup */
-        if (fb > 0.9f) fb = 0.9f;
-        else if (fb < -0.9f) fb = -0.9f;
+        /* Soft limiter — tanh is smooth, hard clamp causes distortion */
+        if (fb > 0.6f || fb < -0.6f)
+            fb = tanhf(fb) * 0.95f;
         /* Write with input */
         rev->lines[i][rev->write_pos[i]] = diff_in + fb;
         rev->write_pos[i] = (rev->write_pos[i] + 1) & (FDN_MAX_DELAY - 1);
@@ -1472,11 +1472,11 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
     }
 
     /* Shimmer: Haze C octave-up shimmer grains.
-       Amplitude scales with shimmer knob so max shimmer = obvious sparkle. */
+       At max shimmer this should be dramatic — clearly audible sparkle. */
     if (inst->shimmer > 0.05f) {
         inst->algorithm = 3; inst->variation = 2;
         inst->activity = inst->shimmer;
-        inst->repeats = inst->sustain * inst->shimmer;
+        inst->repeats = 0.3f + inst->shimmer * 0.7f;  /* 0.3 to 1.0 — loud at max */
         haze_tick(inst);
     }
 
@@ -1637,9 +1637,11 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
        This drives the existing grain algorithms and reverb exactly as
        they worked in the version that sounded good. */
 
-    /* Space → reverb mode (continuous blend via index) + send level */
-    inst->reverb_mode = (int)(inst->space * 3.0f);
+    /* Space → reverb mode. Bias toward larger modes earlier so
+       even moderate space has a real tail. */
+    inst->reverb_mode = (int)(inst->space * 2.0f + 1.0f);  /* 1 at space=0, 3 at space=1 */
     if (inst->reverb_mode > 3) inst->reverb_mode = 3;
+    if (inst->reverb_mode < 0) inst->reverb_mode = 0;
 
     /* Warmth → filter cutoff (inverted: more warmth = lower cutoff) */
     inst->filter = 1.0f - inst->warmth * 0.8f;  /* 1.0 (bright) to 0.2 (warm) */
@@ -1923,12 +1925,14 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         wet_l = svf_lowpass(&inst->svf_l, inst, wet_l);
         wet_r = svf_lowpass(&inst->svf_r, inst, wet_r);
 
-        /* 7. FDN reverb send/return */
-        if (inst->space > 0.001f) {
+        /* 7. FDN reverb send/return.
+              Send has a floor so even low space has some reverb. */
+        {
+            float rev_send = 0.3f + inst->space * 0.7f;  /* 0.3 to 1.0 */
             float rev_out_l = 0.0f, rev_out_r = 0.0f;
-            fdn_process(&inst->reverb, inst->reverb_mode, (dry_l + wet_l) * inst->space, (dry_r + wet_r) * inst->space, &rev_out_l, &rev_out_r, inst->sustain);
-            wet_l += rev_out_l * inst->space;
-            wet_r += rev_out_r * inst->space;
+            fdn_process(&inst->reverb, inst->reverb_mode, (dry_l + wet_l) * rev_send, (dry_r + wet_r) * rev_send, &rev_out_l, &rev_out_r, inst->sustain);
+            wet_l += rev_out_l * rev_send;
+            wet_r += rev_out_r * rev_send;
         }
 
         /* 8. Mix dry/wet (Interrupt algorithm forces 100% wet during events) */
