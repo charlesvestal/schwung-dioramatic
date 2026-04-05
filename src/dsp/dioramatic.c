@@ -335,9 +335,15 @@ typedef struct {
     int pending_algorithm;
     int pending_variation;
 
-    /* Transient-triggered grain scatter — multi-wave wind chime.
-       Each transient triggers multiple overlapping waves of grains,
-       each wave starting later and sparser than the previous. */
+    /* Track where the loud content is in the capture buffer.
+       Grains should read from these "hot spots" — not random positions
+       that might contain silence or reverb wash. */
+    int hot_positions[16];   /* ring buffer of positions where energy was high */
+    int hot_write;
+    int hot_count;
+    int hot_timer;
+
+    /* Transient-triggered grain scatter */
     float scatter_energy;
     float scatter_energy_slow;
     int scatter_origin;
@@ -1533,15 +1539,20 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
             /* Grain length from smear */
             float len_ms = 15.0f + inst->smear * 80.0f + rng_float(&inst->rng_state) * 20.0f;
 
-            /* Read from recent capture buffer */
-            /* Read from anywhere in the capture buffer, evenly spread.
-               Sustain controls how far back. Grains are scattered across
-               the full history — NOT biased toward recent. */
-            float max_reach = 0.5f + inst->sustain * 10.0f;  /* 0.5s to 10.5s */
-            float reach = 0.1f + rng_float(&inst->rng_state) * max_reach;
-            int recent = (int)(SAMPLE_RATE * reach);
-            if (recent >= CAPTURE_SAMPLES) recent = CAPTURE_SAMPLES - 1;
-            int start = (wp - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+            /* Read from HOT SPOTS — positions where there was actual music.
+               This ensures grains always play back musical content, not
+               silence or reverb wash. Each grain picks a random hot spot
+               with a small random offset for variation. */
+            int start;
+            if (inst->hot_count > 0) {
+                int idx = (int)(rng_float(&inst->rng_state) * (float)inst->hot_count);
+                int base = inst->hot_positions[(inst->hot_write - 1 - idx + 16) & 15];
+                int offset = (int)(rng_float(&inst->rng_state) * 4410.0f) - 2205;
+                start = (base + offset + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+            } else {
+                int recent = (int)(SAMPLE_RATE * 0.5f);
+                start = (wp - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+            }
             int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
             if (len < 128) len = 128;
 
@@ -1714,11 +1725,23 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         float dry_l = (float)audio_inout[i * 2] / 32768.0f;
         float dry_r = (float)audio_inout[i * 2 + 1] / 32768.0f;
 
-        /* 2. Write to capture buffer — dry input only.
-              The reverb sustains on its own through the feedback parameter. */
+        /* 2. Write to capture buffer — dry input only. */
         int wp = inst->capture.write_pos;
         inst->capture.buffer[wp].l = dry_l;
         inst->capture.buffer[wp].r = dry_r;
+
+        /* Track hot spots — positions where there's actual musical content.
+           Record a position every ~50ms when input is loud enough. */
+        inst->hot_timer++;
+        if (inst->hot_timer >= 2205) {
+            inst->hot_timer = 0;
+            float energy = dry_l * dry_l + dry_r * dry_r;
+            if (energy > 0.001f) {
+                inst->hot_positions[inst->hot_write] = wp;
+                inst->hot_write = (inst->hot_write + 1) & 15;
+                if (inst->hot_count < 16) inst->hot_count++;
+            }
+        }
 
         /* 2b. Hold/Freeze: feed hold buffer into capture buffer so grains re-process it */
         if (inst->hold_state.active) {

@@ -89,6 +89,7 @@ this.hazeC1=0;this.hazeC2=0;
 /* Mosaic counter */
 this.mosC=0;
 this.prevWL=0;this.prevWR=0;
+this.hotPos=new Int32Array(16);this.hotW=0;this.hotN=0;this.hotT=0;
 this.rng=12345;this.pk=0;this.mc=0;
 this.port.onmessage=e=>{const p=e.data;
 for(const k of['space','shimmer','smear','warmth','drift','sustain','scatter','mix','graintail'])
@@ -131,6 +132,10 @@ const dL=iL[i]*.7,dR=iR[i]*.7;
 const gtFb=this.graintail*0.5;
 this.capL[this.capPos]=dL+this.prevWL*gtFb;
 this.capR[this.capPos]=dR+this.prevWR*gtFb;
+/* Track hot spots — where actual music is */
+this.hotT++;if(this.hotT>=2205){this.hotT=0;
+if(dL*dL+dR*dR>.001){this.hotPos[this.hotW]=this.capPos;this.hotW=(this.hotW+1)&15;
+if(this.hotN<16)this.hotN++}}
 this.capPos=(this.capPos+1)%CS;
 /* LFO */
 const lfo=Math.sin(2*Math.PI*this.lfoP);
@@ -166,9 +171,12 @@ this.tg((st+Math.floor(this.R()*441))%CS,shG,2,.2+this.sustain*.15,pw*.8)}}
 if(this.R()<chimeProb){
 const r=this.R();const sp=this.shimmer>.3?(r<.1?1:r<.5?2:4):(r<.3?1:r<.7?2:4);
 const lenMs=15+this.smear*80+this.R()*20;
-const maxReach=.5+this.sustain*10;const reach=.1+this.R()*maxReach;
-let rec=Math.floor(S*reach);if(rec>=CS)rec=CS-1;
-const st=(wp-rec+CS)%CS;const len=Math.max(128,Math.floor(S*lenMs/1000));
+/* Read from hot spots — where the actual music was */
+let st;
+if(this.hotN>0){const idx=Math.floor(this.R()*this.hotN);
+const base=this.hotPos[(this.hotW-1-idx+16)&15];
+const off=Math.floor(this.R()*4410)-2205;
+st=((base+off)%CS+CS)%CS}else{st=(wp-Math.floor(S*.5)+CS)%CS}const len=Math.max(128,Math.floor(S*lenMs/1000));
 this.tg(st,len,sp,.5+this.sustain*.3,pw)}
 /* === GRAIN PLAYBACK === */
 let wL=0,wR=0;
