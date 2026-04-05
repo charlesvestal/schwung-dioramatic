@@ -347,51 +347,68 @@ static void generate_single_chord(int16_t *buf, int total_frames) {
     }
 }
 
+
 /*
- * Input E: Rhythmic stabs — short percussive hits with silence between.
- * Tests how the effect handles transients and the space between them.
+ * Input E: Noise burst drum hits — filtered noise with bright attack.
+ * Tests how the effect handles non-pitched percussive material.
  */
-static void generate_stabs(int16_t *buf, int total_frames) {
-    synth_t synth;
-    synth_init(&synth);
-    int beat = 44100 * 60 / 110;  /* 110 BPM */
-    int chords[4][3] = {
-        {48, 60, 67},  /* C5 power chord low */
-        {53, 60, 65},  /* F */
-        {55, 62, 67},  /* G */
-        {52, 57, 64},  /* Em */
-    };
-    /* Rhythm: hit on beats 1, 2-and, 4 */
-    int hits[] = {0, 3, 7};  /* in 8th notes */
+static void generate_noise_hits(int16_t *buf, int total_frames) {
+    uint32_t noise_rng = 54321;
+    int beat = 44100 * 60 / 100;
+    float env = 0.0f;
+    float lp = 0.0f;
 
     for (int i = 0; i < total_frames; i++) {
-        int bar_len = beat * 4;
-        int pos_in_bar = i % bar_len;
-        int eighth = pos_in_bar / (beat / 2);
-        int pos_in_eighth = pos_in_bar % (beat / 2);
-        int bar = (i / bar_len) % 4;
-
-        int is_hit = 0;
-        for (int h = 0; h < 3; h++) if (eighth == hits[h]) is_hit = 1;
-
-        if (is_hit && pos_in_eighth == 0) {
-            synth_note_off_all(&synth);
-            for (int n = 0; n < 3; n++) {
-                synth_note_on(&synth, chords[bar][n], 0.35f);
-                synth.voices[n].waveform = 0;  /* bright saw — punchy stabs */
-                synth.voices[n].env_rate = 0.01f;
-            }
-        }
-        /* Quick release after 1/8 of a beat */
-        if (is_hit && pos_in_eighth == beat / 16) {
-            synth_note_off_all(&synth);
-            for (int v = 0; v < MAX_VOICES; v++)
-                if (synth.voices[v].active) synth.voices[v].env_rate = 0.002f;
-        }
-        float sample = synth_tick(&synth);
-        if (sample > 0.9f) sample = 0.9f;
-        if (sample < -0.9f) sample = -0.9f;
+        int pos_in_beat = i % beat;
+        int beat_num = i / beat;
+        if (pos_in_beat == 0 && (beat_num % 2) == 0) env = 0.6f;
+        noise_rng = noise_rng * 1664525u + 1013904223u;
+        float noise = ((float)(noise_rng >> 8) / 16777216.0f) * 2.0f - 1.0f;
+        float coeff = (pos_in_beat < 4410) ? 0.4f : 0.08f;
+        lp += coeff * (noise - lp);
+        float sample = lp * env;
+        env *= 0.9997f;
+        if (sample > 0.8f) sample = 0.8f;
+        if (sample < -0.8f) sample = -0.8f;
         buf[i*2] = buf[i*2+1] = (int16_t)(sample * 32767.0f);
+    }
+}
+
+/*
+ * Input F: Plucked string (Karplus-Strong) — bright attack that decays.
+ * Like a guitar or harp. Tests how the effect handles realistic transients.
+ */
+static void generate_pluck(int16_t *buf, int total_frames) {
+    int beat = 44100 * 60 / 80;
+    #define KS_SIZE 512
+    float ks_buf[KS_SIZE];
+    int ks_pos = 0;
+    uint32_t pluck_rng = 99999;
+    int notes[] = {60, 64, 67, 72, 76, 72, 67, 64};
+    memset(ks_buf, 0, sizeof(ks_buf));
+
+    for (int i = 0; i < total_frames; i++) {
+        int note_period = beat;
+        int pos = i % note_period;
+        int note_idx = (i / note_period) % 8;
+        if (pos == 0) {
+            float freq = 440.0f * powf(2.0f, (float)(notes[note_idx] - 69) / 12.0f);
+            int period = (int)(44100.0f / freq);
+            if (period > KS_SIZE) period = KS_SIZE;
+            for (int j = 0; j < period; j++) {
+                pluck_rng = pluck_rng * 1664525u + 1013904223u;
+                ks_buf[j] = ((float)(pluck_rng >> 8) / 16777216.0f) * 2.0f - 1.0f;
+                ks_buf[j] *= 0.35f;
+            }
+            ks_pos = 0;
+        }
+        float out = ks_buf[ks_pos];
+        int next = (ks_pos + 1) % KS_SIZE;
+        ks_buf[ks_pos] = (ks_buf[ks_pos] + ks_buf[next]) * 0.499f;
+        ks_pos = next;
+        if (out > 0.8f) out = 0.8f;
+        if (out < -0.8f) out = -0.8f;
+        buf[i*2] = buf[i*2+1] = (int16_t)(out * 32767.0f);
     }
 }
 
@@ -468,9 +485,9 @@ int main(void) {
     int total_frames = input_frames + tail_frames;
 
     /* Generate all input types */
-    #define NUM_INPUTS 5
+    #define NUM_INPUTS 6
     int16_t *inputs[NUM_INPUTS];
-    const char *input_names[NUM_INPUTS] = {"piano", "arp", "melody", "chord", "stabs"};
+    const char *input_names[NUM_INPUTS] = {"piano", "arp", "melody", "chord", "drums", "pluck"};
     for (int i = 0; i < NUM_INPUTS; i++)
         inputs[i] = (int16_t *)malloc(input_frames * 2 * sizeof(int16_t));
 
@@ -479,7 +496,8 @@ int main(void) {
     generate_arp_input(inputs[1], input_frames);
     generate_slow_melody(inputs[2], input_frames);
     generate_single_chord(inputs[3], input_frames);
-    generate_stabs(inputs[4], input_frames);
+    generate_noise_hits(inputs[4], input_frames);
+    generate_pluck(inputs[5], input_frames);
 
     /* Save dry inputs */
     for (int i = 0; i < NUM_INPUTS; i++) {
