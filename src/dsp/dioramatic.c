@@ -335,8 +335,14 @@ typedef struct {
     int pending_algorithm;
     int pending_variation;
 
-    /* Reverb feedback into capture buffer — wind chime sustain */
-    float prev_rev_l, prev_rev_r;
+    /* Transient-triggered grain scatter — wind chime behavior */
+    float scatter_energy;       /* fast energy tracker */
+    float scatter_energy_slow;  /* slow average for adaptive threshold */
+    int scatter_remaining;      /* grains left in current scatter */
+    int scatter_timer;          /* samples until next grain */
+    int scatter_interval;       /* current interval (grows each grain) */
+    int scatter_origin;         /* capture buffer position of the transient */
+    int scatter_debounce;       /* prevent re-triggering */
 
     /* MIDI clock */
     uint32_t midi_clock_tick_count;
@@ -1481,6 +1487,88 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
         inst->activity = (inst->drift - 0.5f) * 2.0f;
         tunnel_tick(inst);
     }
+
+    /* === TRANSIENT-TRIGGERED GRAIN SCATTER ===
+       When a signal arrives (energy rises), fire a burst of grains that
+       get farther apart over time. Like throwing crystals — dense at first,
+       then sparser and sparser, each ringing through the reverb.
+       Sustain controls how many grains and how far apart they spread. */
+
+    int wp = inst->capture.write_pos;
+    float sample_l = inst->capture.buffer[(wp - 1 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES].l;
+    float sample_r = inst->capture.buffer[(wp - 1 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES].r;
+    float energy = sample_l * sample_l + sample_r * sample_r;
+    inst->scatter_energy += 0.05f * (energy - inst->scatter_energy);
+    inst->scatter_energy_slow += 0.0005f * (energy - inst->scatter_energy_slow);
+
+    if (inst->scatter_debounce > 0) inst->scatter_debounce--;
+
+    /* Detect transient */
+    if (inst->scatter_debounce == 0 &&
+        inst->scatter_energy > inst->scatter_energy_slow * 3.0f + 0.001f &&
+        inst->scatter_energy > 0.001f) {
+        /* New scatter burst: 5 to 20 grains based on sustain */
+        inst->scatter_remaining = 5 + (int)(inst->sustain * 15.0f);
+        inst->scatter_origin = (wp - 441 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+        inst->scatter_timer = 0;
+        inst->scatter_interval = 441;  /* first trailing grain after ~10ms */
+        inst->scatter_debounce = 8820; /* ~200ms between bursts */
+
+        /* Fire 1-3 grains immediately — the initial splash */
+        int immediate = 1 + (int)(inst->scatter * 2.0f);
+        for (int g = 0; g < immediate && inst->scatter_remaining > 0; g++) {
+            float speed = rng_float(&inst->rng_state) < 0.5f ? 1.0f : 2.0f;
+            if (inst->shimmer > 0.3f && rng_float(&inst->rng_state) < inst->shimmer)
+                speed = 2.0f;
+            int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
+            float len_ms = 20.0f + inst->smear * 60.0f + rng_float(&inst->rng_state) * 20.0f;
+            {
+                grain_t *g = find_free_grain(inst);
+                if (g) {
+                    int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
+                    int start = (inst->scatter_origin + offset) % CAPTURE_SAMPLES;
+                    int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
+                    if (len < 128) len = 128;
+                    init_grain_common(g, inst, start, len, speed);
+                    g->amplitude = 0.5f + inst->sustain * 0.3f;
+                }
+            }
+            inst->scatter_remaining--;
+        }
+    }
+
+    /* Continue active scatter: grains at increasing intervals */
+    if (inst->scatter_remaining > 0) {
+        inst->scatter_timer++;
+        if (inst->scatter_timer >= inst->scatter_interval) {
+            inst->scatter_timer = 0;
+            /* Interval grows — each grain further apart */
+            inst->scatter_interval = (int)((float)inst->scatter_interval * (1.2f + inst->sustain * 0.3f));
+            if (inst->scatter_interval > 88200) inst->scatter_interval = 88200;
+
+            float speed = rng_float(&inst->rng_state) < 0.4f ? 1.0f : 2.0f;
+            if (inst->shimmer > 0.3f && rng_float(&inst->rng_state) < inst->shimmer)
+                speed = (rng_float(&inst->rng_state) < 0.5f) ? 2.0f : 4.0f;
+
+            /* Later grains slightly quieter */
+            int fired = (5 + (int)(inst->sustain * 15.0f)) - inst->scatter_remaining;
+            float decay = 1.0f / (1.0f + (float)fired * 0.08f);
+            float len_ms = 20.0f + inst->smear * 60.0f + rng_float(&inst->rng_state) * 30.0f;
+            {
+                grain_t *g = find_free_grain(inst);
+                if (g) {
+                    int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
+                    int start = (inst->scatter_origin + offset) % CAPTURE_SAMPLES;
+                    int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
+                    if (len < 128) len = 128;
+                    init_grain_common(g, inst, start, len, speed);
+                    g->amplitude = (0.5f + inst->sustain * 0.3f) * decay;
+                }
+            }
+
+            inst->scatter_remaining--;
+        }
+    }
 }
 
 /* ============================================================================
@@ -1858,9 +1946,6 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
             fdn_process(&inst->reverb, inst->reverb_mode, (dry_l + wet_l) * inst->space, (dry_r + wet_r) * inst->space, &rev_out_l, &rev_out_r, inst->sustain);
             wet_l += rev_out_l * inst->space;
             wet_r += rev_out_r * inst->space;
-            /* Store reverb output for capture buffer feedback (wind chime) */
-            inst->prev_rev_l = rev_out_l;
-            inst->prev_rev_r = rev_out_r;
         }
 
         /* 8. Mix dry/wet (Interrupt algorithm forces 100% wet during events) */
