@@ -199,14 +199,14 @@ typedef struct {
     /* Delay line modulation for chorus-like movement in the tail */
     float mod_phase[FDN_LINES];
 
-    /* Shimmer: octave-up pitch shift in the feedback path.
-       Two overlapping grains read at 2x speed, crossfaded with Hann window.
-       This is the Eno/Lanois technique — creates cascading harmonics
-       that build up in the reverb tail like a crystal cave. */
+    /* Shimmer: TWO pitch shifters in the feedback path.
+       Shifter A: octave up (2x) — the main cascade
+       Shifter B: fifth up (1.5x) — adds harmonic richness
+       Together they create a shimmering chord that builds each cycle. */
     float shimmer_buf[SHIMMER_BUF_SIZE];
     int shimmer_write_pos;
-    float shimmer_read_phase_a;  /* grain A read position (fractional) */
-    float shimmer_read_phase_b;  /* grain B read position (offset by half grain) */
+    float shimmer_read_phase_a;   /* octave-up reader (2x) */
+    float shimmer_fifth_phase;    /* fifth-up reader (1.5x) — adds harmonic richness */
 
     /* High shelf state for sparkle boost */
     float sparkle_state_l, sparkle_state_r;
@@ -546,7 +546,7 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     /* Read from delay lines with subtle modulation for lush chorus-like tail */
     float taps[FDN_LINES];
     static const float mod_rates[FDN_LINES] = {0.37f, 0.47f, 0.31f, 0.53f};  /* Hz, different per line */
-    static const float mod_depth = 12.0f;  /* samples of modulation excursion */
+    float mod_depth = 6.0f + sustain_boost * 18.0f;  /* 6 to 24 samples — more sustain = more chorus */
     for (int i = 0; i < FDN_LINES; i++) {
         /* Modulated read position — creates subtle pitch/time variation in the tail */
         float mod_offset = sinf(2.0f * (float)M_PI * rev->mod_phase[i]) * mod_depth;
@@ -594,7 +594,7 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     float grain_phase_b = fmodf((rev->shimmer_read_phase_a + phase_b_offset) / (float)SHIMMER_GRAIN_SIZE, 1.0f);
     float env_b = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * grain_phase_b));
 
-    float shimmer_out = samp_a * env_a + samp_b * env_b;
+    float shimmer_octave = samp_a * env_a + samp_b * env_b;
     rev->shimmer_read_phase_a += 2.0f;  /* 2x speed = octave up */
     /* Keep read phase from drifting too far from write */
     float dist = (float)rev->shimmer_write_pos - rev->shimmer_read_phase_a;
@@ -604,9 +604,41 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         if (rev->shimmer_read_phase_a < 0) rev->shimmer_read_phase_a += (float)SHIMMER_BUF_SIZE;
     }
 
+    /* Second shimmer voice: fifth up (1.5x) — adds harmonic richness.
+       Two grains at 1.5x speed, same Hann crossfade technique.
+       The fifth creates a major chord quality in the cascade. */
+    int rd_f1 = (int)rev->shimmer_fifth_phase;
+    float fr_f1 = rev->shimmer_fifth_phase - (float)rd_f1;
+    float sf1 = rev->shimmer_buf[rd_f1 & (SHIMMER_BUF_SIZE - 1)] * (1.0f - fr_f1)
+              + rev->shimmer_buf[(rd_f1 + 1) & (SHIMMER_BUF_SIZE - 1)] * fr_f1;
+    float ef1 = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * fmodf(rev->shimmer_fifth_phase / (float)SHIMMER_GRAIN_SIZE, 1.0f)));
+
+    float ph_f2 = rev->shimmer_fifth_phase + (float)(SHIMMER_GRAIN_SIZE / 2);
+    int rd_f2 = (int)ph_f2;
+    float fr_f2 = ph_f2 - (float)rd_f2;
+    float sf2 = rev->shimmer_buf[rd_f2 & (SHIMMER_BUF_SIZE - 1)] * (1.0f - fr_f2)
+              + rev->shimmer_buf[(rd_f2 + 1) & (SHIMMER_BUF_SIZE - 1)] * fr_f2;
+    float ef2 = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * fmodf(ph_f2 / (float)SHIMMER_GRAIN_SIZE, 1.0f)));
+
+    float shimmer_fifth = sf1 * ef1 + sf2 * ef2;
+    rev->shimmer_fifth_phase += 1.5f;  /* 1.5x = perfect fifth up */
+    while (rev->shimmer_fifth_phase >= (float)SHIMMER_BUF_SIZE)
+        rev->shimmer_fifth_phase -= (float)SHIMMER_BUF_SIZE;
+    float dist_f = (float)rev->shimmer_write_pos - rev->shimmer_fifth_phase;
+    if (dist_f < 0) dist_f += (float)SHIMMER_BUF_SIZE;
+    if (dist_f > (float)(SHIMMER_BUF_SIZE - SHIMMER_GRAIN_SIZE)) {
+        rev->shimmer_fifth_phase = (float)rev->shimmer_write_pos - (float)(SHIMMER_BUF_SIZE / 2);
+        if (rev->shimmer_fifth_phase < 0) rev->shimmer_fifth_phase += (float)SHIMMER_BUF_SIZE;
+    }
+
+    /* Combined shimmer: octave (bright cascade) + fifth (harmonic richness) */
+    float shimmer_out = shimmer_octave * 0.7f + shimmer_fifth * 0.3f;
+
     /* Shimmer: low levels prevent runaway — even small amounts cascade
        into rich harmonics because the reverb feedback is already high */
-    static const float shimmer_amounts[4] = {0.05f, 0.07f, 0.10f, 0.14f};
+    /* Shimmer levels boosted for more dramatic cascade.
+       The fifth voice adds richness so the total shimmer is lusher. */
+    static const float shimmer_amounts[4] = {0.06f, 0.09f, 0.13f, 0.18f};
     float shimmer_level = shimmer_amounts[mode];
 
     /* Apply feedback, damping, DC removal, shimmer, and write back */
@@ -622,8 +654,14 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         rev->dc_state[i] = fb;
         rev->dc_prev[i] = dc;
         fb = dc;
-        /* Inject shimmer — cascading crystalline harmonics */
-        fb += shimmer_out * shimmer_level;
+        /* Inject shimmer with stereo spread — octave biased L, fifth biased R.
+           This creates a wide crystalline stereo image in the reverb tail. */
+        float shim_inject;
+        if (i < 2)
+            shim_inject = (shimmer_octave * 0.8f + shimmer_fifth * 0.2f) * shimmer_level;
+        else
+            shim_inject = (shimmer_octave * 0.2f + shimmer_fifth * 0.8f) * shimmer_level;
+        fb += shim_inject;
         /* Soft limiter — tanh is smooth, hard clamp causes distortion */
         if (fb > 0.6f || fb < -0.6f)
             fb = tanhf(fb) * 0.95f;
@@ -1539,13 +1577,18 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
         if (rng_float(&inst->rng_state) < prob_per_sample) {
             int wp = inst->capture.write_pos;
 
-            /* Pick speed — biased sparkly */
+            /* Pick speed — octave-aligned intervals for crystal cascade.
+               Includes fifths at high shimmer for harmonic richness. */
             float r = rng_float(&inst->rng_state);
             float speed;
-            if (inst->shimmer > 0.3f) {
-                speed = (r < 0.1f) ? 1.0f : (r < 0.5f) ? 2.0f : 4.0f;
+            if (inst->shimmer > 0.5f) {
+                /* High shimmer: more variety, more highs */
+                float speeds[] = {1.0f, 1.5f, 2.0f, 2.0f, 3.0f, 4.0f};
+                speed = speeds[(int)(r * 6.0f) % 6];
+            } else if (inst->shimmer > 0.2f) {
+                speed = (r < 0.15f) ? 1.0f : (r < 0.35f) ? 1.5f : (r < 0.65f) ? 2.0f : 4.0f;
             } else {
-                speed = (r < 0.3f) ? 1.0f : (r < 0.7f) ? 2.0f : 4.0f;
+                speed = (r < 0.4f) ? 1.0f : (r < 0.8f) ? 2.0f : 4.0f;
             }
 
             /* Grain length from smear */
