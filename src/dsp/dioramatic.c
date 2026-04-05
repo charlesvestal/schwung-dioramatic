@@ -1530,7 +1530,10 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
             float len_ms = 15.0f + inst->smear * 80.0f + rng_float(&inst->rng_state) * 20.0f;
 
             /* Read from recent capture buffer */
-            int recent = (int)(SAMPLE_RATE * 0.05f + rng_float(&inst->rng_state) * SAMPLE_RATE * 0.5f);
+            /* Read from 200ms to 2 seconds ago — NOT recent audio.
+               This is what makes it sound like a chime echoing from the past,
+               not a slapback delay of what you just played. */
+            int recent = (int)(SAMPLE_RATE * 0.2f + rng_float(&inst->rng_state) * SAMPLE_RATE * 1.8f);
             int start = (wp - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
             int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
             if (len < 128) len = 128;
