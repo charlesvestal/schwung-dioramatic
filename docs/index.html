@@ -43,6 +43,7 @@ button:focus-visible,input:focus-visible{outline:2px solid #8080e0;outline-offse
 <div class="fr">
 <label for="fi">Load Audio File</label>
 <input type="file" id="fi" accept="audio/*,.wav,.mp3,.m4a,.aif,.aiff,.ogg,.flac" onchange="loadFile(event)">
+<button id="btn-play-file" style="display:none" onclick="playLoadedFile()">Play</button>
 <span id="fn"></span>
 </div>
 <div class="m"><div class="mf" id="meter"></div></div>
@@ -261,9 +262,14 @@ function setA(id){document.querySelectorAll('.src button').forEach(b=>b.classLis
 async function playBuf(buf,label,id){await init();disc();sn=ctx.createBufferSource();sn.buffer=buf;sn.loop=true;sn.connect(wn);sn.start();setA(id);document.getElementById('status').textContent=label+' (looping)'}
 async function startBuiltin(url,label){await init();document.getElementById('status').textContent='Loading...';
 try{const r=await fetch(url);const ab=await r.arrayBuffer();const buf=await ctx.decodeAudioData(ab);await playBuf(buf,label,'btn-'+label.toLowerCase())}catch(e){document.getElementById('status').textContent='Error: '+e.message}}
+let loadedBuf=null,loadedName='';
 async function loadFile(event){const f=event.target.files[0];if(!f)return;
 try{await init();document.getElementById('fn').textContent=f.name;document.getElementById('status').textContent='Decoding...';
-const ab=await f.arrayBuffer();const buf=await ctx.decodeAudioData(ab);await playBuf(buf,f.name,null)}catch(e){document.getElementById('status').textContent='Error: '+e.message}}
+const ab=await f.arrayBuffer();loadedBuf=await ctx.decodeAudioData(ab);loadedName=f.name;
+document.getElementById('btn-play-file').style.display='inline-block';
+document.getElementById('status').textContent=f.name+' ready — press Play';
+await playBuf(loadedBuf,loadedName,null)}catch(e){document.getElementById('status').textContent='Error: '+e.message}}
+async function playLoadedFile(){if(!loadedBuf)return;await init();await playBuf(loadedBuf,loadedName,null)}
 async function startMic(){await init();disc();const s=await navigator.mediaDevices.getUserMedia({audio:true});
 sn=ctx.createMediaStreamSource(s);sn.connect(wn);sn.stop=()=>s.getTracks().forEach(t=>t.stop());setA('btn-mic');document.getElementById('status').textContent='Mic active'}
 async function startTone(){await init();disc();const o=ctx.createOscillator();o.type='sawtooth';o.frequency.value=220;
