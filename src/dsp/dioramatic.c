@@ -1526,41 +1526,41 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
 
         /* Wave 0: dense splash, starts now */
         inst->scatter_waves[0].active = 1;
-        inst->scatter_waves[0].remaining = 12 + (int)(inst->sustain * 12.0f);
+        inst->scatter_waves[0].remaining = 14 + (int)(inst->sustain * 14.0f);
         inst->scatter_waves[0].total = inst->scatter_waves[0].remaining;
         inst->scatter_waves[0].timer = 0;
         inst->scatter_waves[0].interval = 150;
         inst->scatter_waves[0].amp_scale = 1.0f;
 
-        /* Wave 1: still dense, starts after ~150ms */
+        /* Wave 1: still dense, starts after ~200ms */
         inst->scatter_waves[1].active = 1;
-        inst->scatter_waves[1].remaining = 10 + (int)(inst->sustain * 12.0f);
+        inst->scatter_waves[1].remaining = 12 + (int)(inst->sustain * 14.0f);
         inst->scatter_waves[1].total = inst->scatter_waves[1].remaining;
-        inst->scatter_waves[1].timer = -6615;
+        inst->scatter_waves[1].timer = -8820;
         inst->scatter_waves[1].interval = 441;
-        inst->scatter_waves[1].amp_scale = 0.85f;
+        inst->scatter_waves[1].amp_scale = 0.9f;
 
-        /* Wave 2: medium, starts after ~500ms */
+        /* Wave 2: medium, starts after ~1s */
         inst->scatter_waves[2].active = 1;
-        inst->scatter_waves[2].remaining = 8 + (int)(inst->sustain * 10.0f);
+        inst->scatter_waves[2].remaining = 10 + (int)(inst->sustain * 14.0f);
         inst->scatter_waves[2].total = inst->scatter_waves[2].remaining;
-        inst->scatter_waves[2].timer = -22050;
-        inst->scatter_waves[2].interval = 2205;
-        inst->scatter_waves[2].amp_scale = 0.7f;
+        inst->scatter_waves[2].timer = -44100;
+        inst->scatter_waves[2].interval = 1764;
+        inst->scatter_waves[2].amp_scale = 0.75f;
 
-        /* Wave 3: sparse tail, starts after ~1.5s */
+        /* Wave 3: sparse long tail, starts after ~3s */
         inst->scatter_waves[3].active = 1;
-        inst->scatter_waves[3].remaining = 6 + (int)(inst->sustain * 10.0f);
+        inst->scatter_waves[3].remaining = 8 + (int)(inst->sustain * 14.0f);
         inst->scatter_waves[3].total = inst->scatter_waves[3].remaining;
-        inst->scatter_waves[3].timer = -66150;
+        inst->scatter_waves[3].timer = -132300;
         inst->scatter_waves[3].interval = 4410;
-        inst->scatter_waves[3].amp_scale = 0.55f;
+        inst->scatter_waves[3].amp_scale = 0.6f;
 
         /* Immediate splash from wave 0 */
         int immediate = 2 + (int)(inst->scatter * 3.0f);
         for (int g = 0; g < immediate && inst->scatter_waves[0].remaining > 0; g++) {
-            float speed = rng_float(&inst->rng_state) < 0.5f ? 1.0f : 2.0f;
-            if (inst->shimmer > 0.3f) speed = 2.0f;
+            float r2 = rng_float(&inst->rng_state);
+            float speed = (r2 < 0.2f) ? 1.0f : (r2 < 0.6f) ? 2.0f : 4.0f;
             float len_ms = 20.0f + inst->smear * 60.0f + rng_float(&inst->rng_state) * 20.0f;
             grain_t *gr = find_free_grain(inst);
             if (gr) {
@@ -1592,9 +1592,13 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
             inst->scatter_waves[w].interval = (int)((float)inst->scatter_waves[w].interval * (1.05f + inst->sustain * 0.08f));
             if (inst->scatter_waves[w].interval > 88200) inst->scatter_waves[w].interval = 88200;
 
-            float speed = rng_float(&inst->rng_state) < 0.4f ? 1.0f : 2.0f;
-            if (inst->shimmer > 0.3f && rng_float(&inst->rng_state) < inst->shimmer)
-                speed = (rng_float(&inst->rng_state) < 0.5f) ? 2.0f : 4.0f;
+            /* Bias heavily toward octave-up for sparkle */
+            float r = rng_float(&inst->rng_state);
+            float speed = (r < 0.25f) ? 1.0f : (r < 0.7f) ? 2.0f : 4.0f;
+            if (inst->shimmer > 0.2f) {
+                r = rng_float(&inst->rng_state);
+                speed = (r < 0.15f) ? 1.0f : (r < 0.55f) ? 2.0f : 4.0f;
+            }
 
             int fired = inst->scatter_waves[w].total - inst->scatter_waves[w].remaining;
             float decay = 1.0f / (1.0f + (float)fired * 0.025f);
