@@ -1641,13 +1641,11 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         float dry_l = (float)audio_inout[i * 2] / 32768.0f;
         float dry_r = (float)audio_inout[i * 2 + 1] / 32768.0f;
 
-        /* 2. Write to capture buffer — blend in reverb tail so grains
-              keep firing during decay (wind chime effect).
-              Sustain controls how much reverb feeds back into the grain source. */
+        /* 2. Write to capture buffer — dry input only.
+              The reverb sustains on its own through the feedback parameter. */
         int wp = inst->capture.write_pos;
-        float rev_fb = inst->sustain * 0.04f;  /* very subtle — grains pick up reverb tail without buildup */
-        inst->capture.buffer[wp].l = dry_l + inst->prev_rev_l * rev_fb;
-        inst->capture.buffer[wp].r = dry_r + inst->prev_rev_r * rev_fb;
+        inst->capture.buffer[wp].l = dry_l;
+        inst->capture.buffer[wp].r = dry_r;
 
         /* 2b. Hold/Freeze: feed hold buffer into capture buffer so grains re-process it */
         if (inst->hold_state.active) {
