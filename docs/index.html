@@ -125,9 +125,10 @@ const mosInt=this.scatter>.05?Math.max(128,Math.floor(22050/(3+this.scatter*6)))
 const chimePPS=2+this.scatter*10;const chimeProb=chimePPS/S;
 for(let i=0;i<F;i++){
 const dL=iL[i]*.7,dR=iR[i]*.7;
-/* Grain tail: feed wet back into capture so grains keep finding audio.
-   At 0: grains only read dry input. At 1: grains read dry+wet, ringing forever. */
-const gtFb=this.graintail*this.graintail*0.15;
+/* Grain tail: feed reverb output back into capture buffer.
+   Grains read from it, so they keep finding audio to play even after input stops.
+   Linear 0 to 0.5 — slide until grains sustain as long as you want. */
+const gtFb=this.graintail*0.5;
 this.capL[this.capPos]=dL+this.prevWL*gtFb;
 this.capR[this.capPos]=dR+this.prevWR*gtFb;
 this.capPos=(this.capPos+1)%CS;
@@ -223,9 +224,10 @@ fb+=shimOut*shimAmt;
 if(fb>.6||fb<-.6)fb=Math.tanh(fb)*.95;
 this.L[l][this.LP[l]]=df+fb;this.LP[l]=(this.LP[l]+1)&NM}
 wL+=(tp[0]+tp[2])*.45*revSend;wR+=(tp[1]+tp[3])*.45*revSend}
-this.prevWL=wL;this.prevWR=wR;
 let xL=dL*(1-this.mix)+wL*this.mix;let xR=dR*(1-this.mix)+wR*this.mix;
 oL[i]=Math.tanh(xL*1.5)*.667;oR[i]=Math.tanh(xR*1.5)*.667;
+/* Store final output for grain tail feedback — after tanh so it's clean */
+this.prevWL=oL[i];this.prevWR=oR[i];
 const lv=Math.abs(oL[i])>Math.abs(oR[i])?Math.abs(oL[i]):Math.abs(oR[i]);
 if(lv>this.pk)this.pk=lv}
 this.mc+=F;if(this.mc>=2048){this.mc=0;this.port.postMessage({peak:this.pk});this.pk=0}
