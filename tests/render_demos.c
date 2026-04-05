@@ -301,7 +301,7 @@ static void generate_slow_melody(int16_t *buf, int total_frames) {
 
         if (pos == 0) {
             synth_note_off_all(&synth);
-            synth_note_on(&synth, melody[note_idx], 0.3f);
+            synth_note_on(&synth, melody[note_idx], 0.2f);
             synth.voices[0].waveform = 1;  /* pure sine — bell-like melody */
             synth.voices[0].env_rate = 0.001f;
         }
@@ -329,7 +329,7 @@ static void generate_single_chord(int16_t *buf, int total_frames) {
     for (int i = 0; i < total_frames; i++) {
         if (i == 0) {
             for (int n = 0; n < 5; n++) {
-                synth_note_on(&synth, chord[n], 0.2f);
+                synth_note_on(&synth, chord[n], 0.12f);  /* quiet — 5 voices sum up */
                 synth.voices[n].waveform = 2;  /* triangle — soft pad */
                 synth.voices[n].env_rate = 0.0005f;
             }
