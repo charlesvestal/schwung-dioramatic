@@ -1498,126 +1498,48 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
         tunnel_tick(inst);
     }
 
-    /* === MULTI-WAVE GRAIN SCATTER ===
-       Each transient launches 4 overlapping waves of grains.
-       Wave 0: dense, starts immediately (the splash)
-       Wave 1: medium density, starts after ~200ms
-       Wave 2: sparser, starts after ~800ms
-       Wave 3: very sparse, starts after ~2s
-       Together they create a grain tail that stays full for a long time
-       then gradually thins — like a real reverb tail but made of grains. */
+    /* === WIND CHIME GRAINS ===
+       Continuous random sparkly pings — like an actual wind chime.
+       Not a burst. Not a scatter. Individual pings at random intervals,
+       each ringing through the reverb. Keeps going as long as there's
+       audio in the capture buffer to read from.
 
-    int wp = inst->capture.write_pos;
-    float sample_l = inst->capture.buffer[(wp - 1 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES].l;
-    float sample_r = inst->capture.buffer[(wp - 1 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES].r;
-    float energy = sample_l * sample_l + sample_r * sample_r;
-    inst->scatter_energy += 0.05f * (energy - inst->scatter_energy);
-    inst->scatter_energy_slow += 0.0005f * (energy - inst->scatter_energy_slow);
+       Scatter controls the average rate of pings.
+       Shimmer biases toward higher pitches.
+       The randomized timing is what makes it sound natural. */
 
-    if (inst->scatter_debounce > 0) inst->scatter_debounce--;
+    /* Check every sample with a probability gate — creates irregular timing */
+    {
+        /* Average rate: scatter 0 = ~2 pings/sec, scatter 1 = ~12 pings/sec */
+        float pings_per_sec = 2.0f + inst->scatter * 10.0f;
+        float prob_per_sample = pings_per_sec / (float)SAMPLE_RATE;
 
-    /* Detect transient → launch 4 scatter waves */
-    if (inst->scatter_debounce == 0 &&
-        inst->scatter_energy > inst->scatter_energy_slow * 3.0f + 0.001f &&
-        inst->scatter_energy > 0.001f) {
+        if (rng_float(&inst->rng_state) < prob_per_sample) {
+            int wp = inst->capture.write_pos;
 
-        inst->scatter_origin = (wp - 441 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-        inst->scatter_debounce = 4410;
-
-        /* Wave 0: dense splash, starts now */
-        inst->scatter_waves[0].active = 1;
-        inst->scatter_waves[0].remaining = 14 + (int)(inst->sustain * 14.0f);
-        inst->scatter_waves[0].total = inst->scatter_waves[0].remaining;
-        inst->scatter_waves[0].timer = 0;
-        inst->scatter_waves[0].interval = 150;
-        inst->scatter_waves[0].amp_scale = 1.0f;
-
-        /* Wave 1: still dense, starts after ~200ms */
-        inst->scatter_waves[1].active = 1;
-        inst->scatter_waves[1].remaining = 12 + (int)(inst->sustain * 14.0f);
-        inst->scatter_waves[1].total = inst->scatter_waves[1].remaining;
-        inst->scatter_waves[1].timer = -8820;
-        inst->scatter_waves[1].interval = 441;
-        inst->scatter_waves[1].amp_scale = 0.9f;
-
-        /* Wave 2: medium, starts after ~1s */
-        inst->scatter_waves[2].active = 1;
-        inst->scatter_waves[2].remaining = 10 + (int)(inst->sustain * 14.0f);
-        inst->scatter_waves[2].total = inst->scatter_waves[2].remaining;
-        inst->scatter_waves[2].timer = -44100;
-        inst->scatter_waves[2].interval = 1764;
-        inst->scatter_waves[2].amp_scale = 0.75f;
-
-        /* Wave 3: sparse long tail, starts after ~3s */
-        inst->scatter_waves[3].active = 1;
-        inst->scatter_waves[3].remaining = 8 + (int)(inst->sustain * 14.0f);
-        inst->scatter_waves[3].total = inst->scatter_waves[3].remaining;
-        inst->scatter_waves[3].timer = -132300;
-        inst->scatter_waves[3].interval = 4410;
-        inst->scatter_waves[3].amp_scale = 0.6f;
-
-        /* Immediate splash from wave 0 */
-        int immediate = 2 + (int)(inst->scatter * 3.0f);
-        for (int g = 0; g < immediate && inst->scatter_waves[0].remaining > 0; g++) {
-            float r2 = rng_float(&inst->rng_state);
-            float speed = (r2 < 0.2f) ? 1.0f : (r2 < 0.6f) ? 2.0f : 4.0f;
-            float len_ms = 20.0f + inst->smear * 60.0f + rng_float(&inst->rng_state) * 20.0f;
-            grain_t *gr = find_free_grain(inst);
-            if (gr) {
-                int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
-                int start = (inst->scatter_origin + offset) % CAPTURE_SAMPLES;
-                int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
-                if (len < 128) len = 128;
-                init_grain_common(gr, inst, start, len, speed);
-                gr->amplitude = 0.7f + inst->sustain * 0.2f;
-            }
-            inst->scatter_waves[0].remaining--;
-        }
-    }
-
-    /* Process all active scatter waves */
-    for (int w = 0; w < MAX_SCATTER_WAVES; w++) {
-        if (!inst->scatter_waves[w].active || inst->scatter_waves[w].remaining <= 0) {
-            inst->scatter_waves[w].active = 0;
-            continue;
-        }
-
-        inst->scatter_waves[w].timer++;
-        if (inst->scatter_waves[w].timer < 0) continue;  /* delayed start */
-
-        if (inst->scatter_waves[w].timer >= inst->scatter_waves[w].interval) {
-            inst->scatter_waves[w].timer = 0;
-
-            /* Interval grows slowly — stays dense longer */
-            inst->scatter_waves[w].interval = (int)((float)inst->scatter_waves[w].interval * (1.05f + inst->sustain * 0.08f));
-            if (inst->scatter_waves[w].interval > 88200) inst->scatter_waves[w].interval = 88200;
-
-            /* Bias heavily toward octave-up for sparkle */
+            /* Pick speed — biased sparkly */
             float r = rng_float(&inst->rng_state);
-            float speed = (r < 0.25f) ? 1.0f : (r < 0.7f) ? 2.0f : 4.0f;
-            if (inst->shimmer > 0.2f) {
-                r = rng_float(&inst->rng_state);
-                speed = (r < 0.15f) ? 1.0f : (r < 0.55f) ? 2.0f : 4.0f;
+            float speed;
+            if (inst->shimmer > 0.3f) {
+                speed = (r < 0.1f) ? 1.0f : (r < 0.5f) ? 2.0f : 4.0f;
+            } else {
+                speed = (r < 0.3f) ? 1.0f : (r < 0.7f) ? 2.0f : 4.0f;
             }
 
-            int fired = inst->scatter_waves[w].total - inst->scatter_waves[w].remaining;
-            float decay = 1.0f / (1.0f + (float)fired * 0.025f);
-            float amp = (0.6f + inst->sustain * 0.3f) * inst->scatter_waves[w].amp_scale * decay;
-            float len_ms = 20.0f + inst->smear * 60.0f + rng_float(&inst->rng_state) * 30.0f;
+            /* Grain length from smear */
+            float len_ms = 15.0f + inst->smear * 80.0f + rng_float(&inst->rng_state) * 20.0f;
+
+            /* Read from recent capture buffer */
+            int recent = (int)(SAMPLE_RATE * 0.05f + rng_float(&inst->rng_state) * SAMPLE_RATE * 0.5f);
+            int start = (wp - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+            int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
+            if (len < 128) len = 128;
 
             grain_t *gr = find_free_grain(inst);
             if (gr) {
-                int offset = (int)(rng_float(&inst->rng_state) * 882.0f);
-                int start = (inst->scatter_origin + offset) % CAPTURE_SAMPLES;
-                int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
-                if (len < 128) len = 128;
                 init_grain_common(gr, inst, start, len, speed);
-                gr->amplitude = amp;
+                gr->amplitude = 0.5f + inst->sustain * 0.3f;
             }
-
-            inst->scatter_waves[w].remaining--;
-            if (inst->scatter_waves[w].remaining <= 0)
-                inst->scatter_waves[w].active = 0;
         }
     }
 }
