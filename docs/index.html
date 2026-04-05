@@ -91,6 +91,8 @@ this.hazeC1=0;this.hazeC2=0;
 this.mosC=0;
 this.prevWL=0;this.prevWR=0;this.gtHpL=0;this.gtHpR=0;
 this.hotPos=new Int32Array(16);this.hotW=0;this.hotN=0;this.hotT=0;
+/* Smoothed space value to prevent clicks when turning the knob */
+this.spaceSmooth=this.space;
 this.rng=12345;this.pk=0;this.mc=0;
 this.port.onmessage=e=>{const p=e.data;
 for(const k of['space','shimmer','smear','warmth','drift','sustain','scatter','mix','graintail'])
@@ -189,6 +191,9 @@ let wL=0,wR=0;
 for(let g of this.grains){if(!g.a)continue;
 const idx=Math.floor(g.st+g.pos);const fr=(g.st+g.pos)-idx;
 const i0=((idx%CS)+CS)%CS;const i1=(i0+1)%CS;
+/* Skip if reading too close to write head — prevents discontinuity clicks */
+const dist=((wp-i0)%CS+CS)%CS;
+if(dist<256){g.a=0;continue}
 const sL=this.capL[i0]*(1-fr)+this.capL[i1]*fr;
 const sR=this.capR[i0]*(1-fr)+this.capR[i1]*fr;
 const env=this.hann(g.ep);const am=g.am*env;
@@ -206,10 +211,13 @@ if(revSend>.01){
 let df=(dL+dR+wL+wR)*.5*revSend;
 for(let a=0;a<4;a++){const d=this.AB[a][this.AP[a]];const o=d-.5*df;
 this.AB[a][this.AP[a]]=df+.5*o;df=o;this.AP[a]=(this.AP[a]+1)%this.AL[a]}
+/* Smooth space to avoid clicks from delay length jumps */
+this.spaceSmooth+=0.0001*(this.space-this.spaceSmooth);
+const sp=this.spaceSmooth;
 let tp=[0,0,0,0];
 for(let l=0;l<4;l++){
-const lens=[1087+Math.floor(this.space*3000),1283+Math.floor(this.space*3500),
-1447+Math.floor(this.space*3800),1663+Math.floor(this.space*4200)];
+const lens=[1087+Math.floor(sp*3000),1283+Math.floor(sp*3500),
+1447+Math.floor(sp*3800),1663+Math.floor(sp*4200)];
 const mo=Math.sin(2*Math.PI*this.LM[l])*mD;
 let fd=lens[l]+mo;if(fd<1)fd=1;if(fd>=N-1)fd=N-2;
 const ri=Math.floor(fd),rf=fd-ri;
