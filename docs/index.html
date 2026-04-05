@@ -75,8 +75,8 @@ this.grains=[];for(let i=0;i<32;i++)
 this.grains.push({a:0,st:0,len:0,pos:0,sp:1,am:0,ei:0,ep:0,pl:.5,pr:.5,dt:1});
 /* FDN reverb */
 const N=8192;this.N=N;this.NM=N-1;
-this.L=[];this.LP=[];this.LLP=[];this.LM=[];
-for(let i=0;i<4;i++){this.L.push(new Float32Array(N));this.LP.push(0);this.LLP.push(0);this.LM.push(0)}
+this.L=[];this.LP=[];this.LLP=[];this.LM=[];this.LDC=[];this.LDCP=[];
+for(let i=0;i<4;i++){this.L.push(new Float32Array(N));this.LP.push(0);this.LLP.push(0);this.LM.push(0);this.LDC.push(0);this.LDCP.push(0)}
 this.AL=[241,173,419,313];this.AB=this.AL.map(l=>new Float32Array(l));this.AP=[0,0,0,0];
 /* Shimmer pitch shift */
 const SB=4096;this.SB=SB;this.SBM=SB-1;
@@ -235,6 +235,8 @@ const sd=this.shimW-this.shimR;if(sd<0||sd>this.SB-gs)
 /* Feedback with damping + shimmer + tanh limiter */
 for(let l=0;l<4;l++){let fb=mx[l]*effFb;
 this.LLP[l]+=pDmp*(fb-this.LLP[l]);fb=this.LLP[l];
+/* DC blocker — prevents LF drone buildup at high space */
+const dc=fb-this.LDC[l]+.997*this.LDCP[l];this.LDC[l]=fb;this.LDCP[l]=dc;fb=dc;
 fb+=shimOut*shimAmt;
 if(fb>.6||fb<-.6)fb=Math.tanh(fb)*.95;
 this.L[l][this.LP[l]]=df+fb;this.LP[l]=(this.LP[l]+1)&NM}

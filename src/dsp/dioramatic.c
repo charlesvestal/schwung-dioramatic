@@ -183,6 +183,9 @@ typedef struct {
 
     /* Per-line one-pole lowpass for damping */
     float lp_state[FDN_LINES];
+    /* Per-line DC blocker to prevent LF buildup */
+    float dc_state[FDN_LINES];
+    float dc_prev[FDN_LINES];
 
     /* Input allpass diffusers */
     float ap_buf[FDN_NUM_AP][FDN_AP_MAX];
@@ -604,12 +607,19 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     static const float shimmer_amounts[4] = {0.05f, 0.07f, 0.10f, 0.14f};
     float shimmer_level = shimmer_amounts[mode];
 
-    /* Apply feedback, damping, shimmer injection, and write back */
+    /* Apply feedback, damping, DC removal, shimmer, and write back */
     for (int i = 0; i < FDN_LINES; i++) {
         float fb = mixed[i] * effective_feedback;
-        /* One-pole lowpass damping */
+        /* One-pole lowpass damping (removes highs) */
         rev->lp_state[i] += p->damping * (fb - rev->lp_state[i]);
         fb = rev->lp_state[i];
+        /* DC blocker in feedback — prevents low-frequency buildup that
+           turns into a drone at high feedback/space settings.
+           One-pole highpass at ~20Hz. */
+        float dc = fb - rev->dc_state[i] + 0.997f * rev->dc_prev[i];
+        rev->dc_state[i] = fb;
+        rev->dc_prev[i] = dc;
+        fb = dc;
         /* Inject shimmer — cascading crystalline harmonics */
         fb += shimmer_out * shimmer_level;
         /* Soft limiter — tanh is smooth, hard clamp causes distortion */
