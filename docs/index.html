@@ -89,7 +89,7 @@ this.lfoP=0;
 this.hazeC1=0;this.hazeC2=0;
 /* Mosaic counter */
 this.mosC=0;
-this.prevWL=0;this.prevWR=0;
+this.prevWL=0;this.prevWR=0;this.gtHpL=0;this.gtHpR=0;
 this.hotPos=new Int32Array(16);this.hotW=0;this.hotN=0;this.hotT=0;
 this.rng=12345;this.pk=0;this.mc=0;
 this.port.onmessage=e=>{const p=e.data;
@@ -130,11 +130,15 @@ const dL=iL[i]*.7,dR=iR[i]*.7;
 /* Grain tail: feed reverb output back into capture buffer.
    Grains read from it, so they keep finding audio to play even after input stops.
    Linear 0 to 0.5 — slide until grains sustain as long as you want. */
-/* Grain tail: max 0.08 — safe at all space/shimmer combinations.
-   Higher values cause phase cancellation at high reverb levels. */
-const gtFb=this.graintail*0.08;
-this.capL[this.capPos]=dL+this.prevWL*gtFb;
-this.capR[this.capPos]=dR+this.prevWR*gtFb;
+/* Grain tail: feed only the HIGH frequencies of the output back.
+   A one-pole highpass extracts the shimmer/sparkle content and feeds
+   it back, so grains keep finding sparkly material without the
+   fundamental cancelling itself. More tail = more shimmer sustain. */
+const gtFb=this.graintail*0.3;
+const hpL=this.prevWL-this.gtHpL;this.gtHpL+=0.05*hpL;
+const hpR=this.prevWR-this.gtHpR;this.gtHpR+=0.05*hpR;
+this.capL[this.capPos]=dL+hpL*gtFb;
+this.capR[this.capPos]=dR+hpR*gtFb;
 /* Track hot spots — where actual music is */
 this.hotT++;if(this.hotT>=2205){this.hotT=0;
 if(dL*dL+dR*dR>.001){this.hotPos[this.hotW]=this.capPos;this.hotW=(this.hotW+1)&15;
