@@ -382,7 +382,7 @@ int main(void) {
         {"bright-air",
          "{\"space\":0.70,\"shimmer\":0.45,\"smear\":0.35,\"warmth\":0.10,\"drift\":0.35,\"sustain\":0.75,\"scatter\":0.55,\"mix\":0.70}"},
         {"infinite-drift",
-         "{\"space\":0.90,\"shimmer\":0.50,\"smear\":0.60,\"warmth\":0.40,\"drift\":0.80,\"sustain\":0.95,\"scatter\":0.60,\"mix\":0.85}"},
+         "{\"space\":0.90,\"shimmer\":0.50,\"smear\":0.60,\"warmth\":0.45,\"drift\":0.80,\"sustain\":0.88,\"scatter\":0.60,\"mix\":0.85}"},
         {"tight-shimmer",
          "{\"space\":0.35,\"shimmer\":0.60,\"smear\":0.20,\"warmth\":0.30,\"drift\":0.20,\"sustain\":0.70,\"scatter\":0.30,\"mix\":0.60}"},
     };

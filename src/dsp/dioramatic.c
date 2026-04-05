@@ -335,6 +335,9 @@ typedef struct {
     int pending_algorithm;
     int pending_variation;
 
+    /* Reverb feedback into capture buffer — wind chime sustain */
+    float prev_rev_l, prev_rev_r;
+
     /* MIDI clock */
     uint32_t midi_clock_tick_count;
     uint32_t midi_clock_sample_counter;  /* samples since last clock reset */
@@ -1638,10 +1641,13 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         float dry_l = (float)audio_inout[i * 2] / 32768.0f;
         float dry_r = (float)audio_inout[i * 2 + 1] / 32768.0f;
 
-        /* 2. Write to capture buffer */
+        /* 2. Write to capture buffer — blend in reverb tail so grains
+              keep firing during decay (wind chime effect).
+              Sustain controls how much reverb feeds back into the grain source. */
         int wp = inst->capture.write_pos;
-        inst->capture.buffer[wp].l = dry_l;
-        inst->capture.buffer[wp].r = dry_r;
+        float rev_fb = inst->sustain * 0.04f;  /* very subtle — grains pick up reverb tail without buildup */
+        inst->capture.buffer[wp].l = dry_l + inst->prev_rev_l * rev_fb;
+        inst->capture.buffer[wp].r = dry_r + inst->prev_rev_r * rev_fb;
 
         /* 2b. Hold/Freeze: feed hold buffer into capture buffer so grains re-process it */
         if (inst->hold_state.active) {
@@ -1854,6 +1860,9 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
             fdn_process(&inst->reverb, inst->reverb_mode, (dry_l + wet_l) * inst->space, (dry_r + wet_r) * inst->space, &rev_out_l, &rev_out_r, inst->sustain);
             wet_l += rev_out_l * inst->space;
             wet_r += rev_out_r * inst->space;
+            /* Store reverb output for capture buffer feedback (wind chime) */
+            inst->prev_rev_l = rev_out_l;
+            inst->prev_rev_r = rev_out_r;
         }
 
         /* 8. Mix dry/wet (Interrupt algorithm forces 100% wet during events) */
