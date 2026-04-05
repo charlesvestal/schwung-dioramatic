@@ -57,7 +57,7 @@ button:focus-visible,input:focus-visible{outline:2px solid #8080e0;outline-offse
 <div class="k"><label>Mix</label><span class="h">dry &rarr; wet</span><input type="range" id="k-mix" min="0" max="100" value="60"><div class="v" id="v-mix">60</div></div>
 </div>
 <div class="ctrls" style="grid-template-columns:1fr;max-width:640px">
-<div class="k" style="background:#1a1228"><label>Grain Tail</label><span class="h">grains die fast &rarr; grains ring forever</span><input type="range" id="k-graintail" min="0" max="100" value="0"><div class="v" id="v-graintail">50</div></div>
+<div class="k" style="background:#1a1228"><label>Grain Tail</label><span class="h">grains die fast &rarr; grains ring forever</span><input type="range" id="k-graintail" min="0" max="100" value="50"><div class="v" id="v-graintail">50</div></div>
 </div>
 <div class="st" id="status" role="status" aria-live="polite">Click a source to begin</div>
 <script>
@@ -65,7 +65,7 @@ const P=`
 class D extends AudioWorkletProcessor{
 constructor(){super();const S=sampleRate;this.S=S;
 this.space=.55;this.shimmer=.35;this.smear=.4;this.warmth=.45;
-this.drift=.35;this.sustain=.5;this.scatter=.4;this.mix=.6;this.graintail=0;
+this.drift=.35;this.sustain=.5;this.scatter=.4;this.mix=.6;this.graintail=.5;
 /* 12-second capture buffer */
 this.capSize=Math.floor(S*12);this.capL=new Float32Array(this.capSize);
 this.capR=new Float32Array(this.capSize);this.capPos=0;
@@ -129,7 +129,9 @@ const dL=iL[i]*.7,dR=iR[i]*.7;
 /* Grain tail: feed reverb output back into capture buffer.
    Grains read from it, so they keep finding audio to play even after input stops.
    Linear 0 to 0.5 — slide until grains sustain as long as you want. */
-const gtFb=this.graintail*0.5;
+/* Grain tail: max 0.08 — safe at all space/shimmer combinations.
+   Higher values cause phase cancellation at high reverb levels. */
+const gtFb=this.graintail*0.08;
 this.capL[this.capPos]=dL+this.prevWL*gtFb;
 this.capR[this.capPos]=dR+this.prevWR*gtFb;
 /* Track hot spots — where actual music is */
