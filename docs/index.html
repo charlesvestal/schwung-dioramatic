@@ -134,7 +134,7 @@ const dL=iL[i]*.7,dR=iR[i]*.7;
    A one-pole highpass extracts the shimmer/sparkle content and feeds
    it back, so grains keep finding sparkly material without the
    fundamental cancelling itself. More tail = more shimmer sustain. */
-const gtFb=this.graintail*0.3;
+const gtFb=this.graintail*0.06;
 const hpL=this.prevWL-this.gtHpL;this.gtHpL+=0.05*hpL;
 const hpR=this.prevWR-this.gtHpR;this.gtHpR+=0.05*hpR;
 this.capL[this.capPos]=dL+hpL*gtFb;
