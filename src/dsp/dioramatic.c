@@ -1462,17 +1462,21 @@ static void delay_configure_taps_if_dirty(dioramatic_instance_t *inst) {
    Each knob fades in a specific grain behavior from the algorithms you liked.
    The grain functions are called with internal params set by the knob mapping. */
 static void algorithm_tick(dioramatic_instance_t *inst) {
-    /* Smear: Haze A micro-grain cloud (density from smear knob) */
+    /* Smear: Haze A micro-grain cloud (density from smear knob).
+       Also scales grain amplitude with the knob. */
     if (inst->smear > 0.05f) {
         inst->algorithm = 3; inst->variation = 0;
         inst->activity = inst->smear;
+        inst->repeats = inst->sustain * inst->smear;  /* amplitude scales with knob */
         haze_tick(inst);
     }
 
-    /* Shimmer: Haze C octave-up shimmer grains */
+    /* Shimmer: Haze C octave-up shimmer grains.
+       Amplitude scales with shimmer knob so max shimmer = obvious sparkle. */
     if (inst->shimmer > 0.05f) {
         inst->algorithm = 3; inst->variation = 2;
         inst->activity = inst->shimmer;
+        inst->repeats = inst->sustain * inst->shimmer;
         haze_tick(inst);
     }
 
