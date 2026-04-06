@@ -571,7 +571,7 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
        A 1kHz shimmer signal becomes 3kHz + 5kHz + 7kHz + 9kHz + ...
        Highpass keeps only the upper harmonics — the actual sparkle.
        This works regardless of input frequency. */
-    float driven = tanhf(shimmer_raw * 6.0f);
+    float driven = tanhf(shimmer_raw * 3.0f);
     /* One-pole highpass: extract only the generated upper harmonics */
     rev->sparkle_state_l += 0.2f * (driven - rev->sparkle_state_l);
     float sparkle_content = driven - rev->sparkle_state_l;
@@ -1518,9 +1518,8 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
                 int wp = inst->capture.write_pos;
                 int recent = (int)(SAMPLE_RATE * 0.1f + rng_float(&inst->rng_state) * SAMPLE_RATE * 0.4f);
                 int start = (wp - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-                /* VERY short: 1-3ms — a transient click/ping, not a tone */
-                int len = 44 + (int)(rng_float(&inst->rng_state) * 88.0f);
-                if (len < 44) len = 44;
+                /* Short but not clicking: 5-15ms — bright ping with smooth envelope */
+                int len = 220 + (int)(rng_float(&inst->rng_state) * 440.0f);
                 /* Speed: 4x or 8x — always very high */
                 float speed = rng_float(&inst->rng_state) < 0.3f ? 4.0f : 8.0f;
                 init_grain_common(g, inst, start, len, speed);
