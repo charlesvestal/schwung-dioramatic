@@ -1918,10 +1918,14 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         float out_l = dry_l * (1.0f - mix) + wet_l * mix;
         float out_r = dry_r * (1.0f - mix) + wet_r * mix;
 
-        /* 9. Soft clip with tanh for musical saturation (bypass at mix=0 for clean passthrough) */
+        /* 9. Transparent safety limiter — only engages near clipping.
+           Below 0.8 this is unity gain. Above 0.8 it gently bends toward 1.0.
+           No coloration, no compression of normal-level signals. */
         if (mix > 0.001f) {
-            out_l = tanhf(out_l * 1.5f) * 0.667f;
-            out_r = tanhf(out_r * 1.5f) * 0.667f;
+            if (out_l > 0.8f) out_l = 0.8f + tanhf((out_l - 0.8f) * 5.0f) * 0.2f;
+            else if (out_l < -0.8f) out_l = -0.8f + tanhf((out_l + 0.8f) * 5.0f) * 0.2f;
+            if (out_r > 0.8f) out_r = 0.8f + tanhf((out_r - 0.8f) * 5.0f) * 0.2f;
+            else if (out_r < -0.8f) out_r = -0.8f + tanhf((out_r + 0.8f) * 5.0f) * 0.2f;
         }
 
         audio_inout[i * 2]     = (int16_t)(out_l * 32767.0f);

@@ -470,7 +470,7 @@ static void render_preset(audio_fx_api_v2_t *api, const preset_t *preset,
 int main(void) {
     audio_fx_api_v2_t *api = move_audio_fx_init_v2(&th);
 
-    const char *output_dir = "/Users/charlesvestal/Desktop/dioramatic-demos";
+    const char *output_dir = "/Users/charlesvestal/Desktop/dioramatic-demos-v3";
 
     /* Create output directory */
     char cmd[256];
