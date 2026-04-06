@@ -172,9 +172,10 @@ typedef struct {
 #define FDN_NUM_AP 4   /* input allpass diffusers */
 #define FDN_AP_MAX 512
 
-/* Shimmer pitch shift buffer — simple granular octave-up in the reverb feedback */
-#define SHIMMER_BUF_SIZE 16384  /* must be > 2x SHIMMER_GRAIN_SIZE */
-#define SHIMMER_GRAIN_SIZE 4096   /* longer = smoother crossfade, less clicking */   /* ~23ms grain for smooth pitch shifting */
+/* Shimmer pitch shift buffer — 4-grain overlapping octave-up in the reverb feedback */
+#define SHIMMER_BUF_SIZE 32768  /* must be > 4x SHIMMER_GRAIN_SIZE */
+#define SHIMMER_GRAIN_SIZE 8192   /* ~186ms grain for very smooth crossfade */
+#define SHIMMER_NUM_GRAINS 4      /* 4 overlapping grains = much smoother than 2 */
 
 typedef struct {
     /* Delay lines */
@@ -202,8 +203,9 @@ typedef struct {
        that build up in the reverb tail like a crystal cave. */
     float shimmer_buf[SHIMMER_BUF_SIZE];
     int shimmer_write_pos;
-    float shimmer_read_phase_a;  /* grain A read position (fractional) */
-    float shimmer_read_phase_b;  /* grain B read position (offset by half grain) */
+    float shimmer_read_phase;    /* base read position (fractional) */
+    float shimmer_jitter;        /* slow random drift to break periodicity */
+    uint32_t shimmer_rng;        /* RNG state for jitter */
 
     /* High shelf state for sparkle boost */
     float sparkle_state_l, sparkle_state_r;
@@ -544,27 +546,27 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     rev->shimmer_buf[rev->shimmer_write_pos] = fb_mono;
     rev->shimmer_write_pos = (rev->shimmer_write_pos + 1) & (SHIMMER_BUF_SIZE - 1);
 
-    /* Grain A: read at 2x speed */
-    int rd_a = (int)rev->shimmer_read_phase_a;
-    float frac_a = rev->shimmer_read_phase_a - (float)rd_a;
-    int idx_a0 = rd_a & (SHIMMER_BUF_SIZE - 1);
-    int idx_a1 = (rd_a + 1) & (SHIMMER_BUF_SIZE - 1);
-    float samp_a = rev->shimmer_buf[idx_a0] * (1.0f - frac_a) + rev->shimmer_buf[idx_a1] * frac_a;
-    /* Hann window for grain A based on position within grain cycle */
-    float grain_phase_a = fmodf(rev->shimmer_read_phase_a / (float)SHIMMER_GRAIN_SIZE, 1.0f);
-    float env_a = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * grain_phase_a));
-
-    /* Grain B: offset by half a grain length */
-    float phase_b_offset = (float)(SHIMMER_GRAIN_SIZE / 2);
-    int rd_b = (int)(rev->shimmer_read_phase_a + phase_b_offset);
-    float frac_b = (rev->shimmer_read_phase_a + phase_b_offset) - (float)rd_b;
-    int idx_b0 = rd_b & (SHIMMER_BUF_SIZE - 1);
-    int idx_b1 = (rd_b + 1) & (SHIMMER_BUF_SIZE - 1);
-    float samp_b = rev->shimmer_buf[idx_b0] * (1.0f - frac_b) + rev->shimmer_buf[idx_b1] * frac_b;
-    float grain_phase_b = fmodf((rev->shimmer_read_phase_a + phase_b_offset) / (float)SHIMMER_GRAIN_SIZE, 1.0f);
-    float env_b = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * grain_phase_b));
-
-    float shimmer_raw = samp_a * env_a + samp_b * env_b;
+    /* 4-grain overlapping pitch shift: each grain offset by 1/4 grain length.
+       4 Hann windows offset by 0.25 sum to a MUCH flatter envelope than 2 at 0.5,
+       eliminating the periodic amplitude modulation that causes clicking.
+       Plus slow random jitter on the read speed breaks any remaining periodicity. */
+    float shimmer_raw = 0.0f;
+    float grain_spacing = (float)SHIMMER_GRAIN_SIZE * 0.25f;
+    for (int g = 0; g < SHIMMER_NUM_GRAINS; g++) {
+        float phase_offset = (float)g * grain_spacing;
+        float rd_phase = rev->shimmer_read_phase + phase_offset;
+        int rd = (int)rd_phase;
+        float frac = rd_phase - (float)rd;
+        int idx0 = rd & (SHIMMER_BUF_SIZE - 1);
+        int idx1 = (rd + 1) & (SHIMMER_BUF_SIZE - 1);
+        float samp = rev->shimmer_buf[idx0] * (1.0f - frac) + rev->shimmer_buf[idx1] * frac;
+        /* Hann window: each grain at phase g/4 through the cycle */
+        float gp = fmodf((rev->shimmer_read_phase + phase_offset) / (float)SHIMMER_GRAIN_SIZE, 1.0f);
+        float env = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * gp));
+        shimmer_raw += samp * env;
+    }
+    /* Normalize: 4 Hann windows offset by 1/4 sum to ~2.0 */
+    shimmer_raw *= 0.5f;
 
     /* SPARKLE GENERATOR: create high-frequency harmonics from the shimmer.
        tanh(x*4) generates odd harmonics (3rd, 5th, 7th...) from any input.
@@ -579,13 +581,13 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     /* Blend: original shimmer + lots of sparkle harmonics */
     float shimmer_out = shimmer_raw + sparkle_content * 0.5f;
 
-    rev->shimmer_read_phase_a += 2.0f;  /* 2x speed = octave up */
+    rev->shimmer_read_phase += 2.0f;  /* 2x speed = octave up */
     /* Keep read phase from drifting too far from write */
-    float dist = (float)rev->shimmer_write_pos - rev->shimmer_read_phase_a;
+    float dist = (float)rev->shimmer_write_pos - rev->shimmer_read_phase;
     if (dist < 0) dist += (float)SHIMMER_BUF_SIZE;
-    if (dist > (float)(SHIMMER_BUF_SIZE - SHIMMER_GRAIN_SIZE)) {
-        rev->shimmer_read_phase_a = (float)rev->shimmer_write_pos - (float)(SHIMMER_BUF_SIZE / 2);
-        if (rev->shimmer_read_phase_a < 0) rev->shimmer_read_phase_a += (float)SHIMMER_BUF_SIZE;
+    if (dist > (float)(SHIMMER_BUF_SIZE - SHIMMER_GRAIN_SIZE * 2)) {
+        rev->shimmer_read_phase = (float)rev->shimmer_write_pos - (float)(SHIMMER_BUF_SIZE / 2);
+        if (rev->shimmer_read_phase < 0) rev->shimmer_read_phase += (float)SHIMMER_BUF_SIZE;
     }
 
     /* Shimmer: low levels prevent runaway — even small amounts cascade
