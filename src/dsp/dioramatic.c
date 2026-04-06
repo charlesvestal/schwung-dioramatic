@@ -572,18 +572,12 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     /* Normalize: 4 Hann windows offset by 1/4 sum to ~2.0 */
     shimmer_raw *= 0.5f;
 
-    /* SPARKLE GENERATOR: create high-frequency harmonics from the shimmer.
-       tanh(x*4) generates odd harmonics (3rd, 5th, 7th...) from any input.
-       A 1kHz shimmer signal becomes 3kHz + 5kHz + 7kHz + 9kHz + ...
-       Highpass keeps only the upper harmonics — the actual sparkle.
-       This works regardless of input frequency. */
-    float driven = tanhf(shimmer_raw * 3.0f);
-    /* One-pole highpass: extract only the generated upper harmonics */
-    rev->sparkle_state_l += 0.2f * (driven - rev->sparkle_state_l);
-    float sparkle_content = driven - rev->sparkle_state_l;
-
-    /* Blend: original shimmer + lots of sparkle harmonics */
-    float shimmer_out = shimmer_raw + sparkle_content * 0.5f;
+    /* SPARKLE: high-shelf boost on shimmer — emphasizes existing HF content
+       without creating waveshaper distortion harmonics in the feedback loop.
+       One-pole lowpass extracts bass; subtract to get treble; blend back. */
+    rev->sparkle_state_l += 0.12f * (shimmer_raw - rev->sparkle_state_l);
+    float shimmer_hf = shimmer_raw - rev->sparkle_state_l;  /* HF content */
+    float shimmer_out = shimmer_raw + shimmer_hf * 0.6f;  /* boost treble by 60% */
 
     rev->shimmer_read_phase += 2.0f;  /* 2x speed = octave up */
     /* Keep read phase from drifting too far from write */
@@ -613,18 +607,17 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         /* Shimmer sparkle bypasses damping but scales with headroom to prevent self-oscillation */
         float fb_sparkle = shimmer_out * shimmer_level * 0.45f * shimmer_scale;
         fb = fb_damped + fb_sparkle;
-        /* Soft limiter: tanh keeps signal musical instead of hard clipping */
-        if (fb > 0.7f || fb < -0.7f) {
-            fb = tanhf(fb);
-        }
+        /* Safety limiter: only engages near actual overload */
+        if (fb > 0.9f) fb = 0.9f + (fb - 0.9f) * 0.1f;
+        else if (fb < -0.9f) fb = -0.9f + (fb + 0.9f) * 0.1f;
         /* Write with input */
         rev->lines[i][rev->write_pos[i]] = diff_in + fb;
         rev->write_pos[i] = (rev->write_pos[i] + 1) & (FDN_MAX_DELAY - 1);
     }
 
     /* Raw stereo output from alternating lines */
-    float raw_l = (taps[0] + taps[2]) * 0.45f;
-    float raw_r = (taps[1] + taps[3]) * 0.45f;
+    float raw_l = (taps[0] + taps[2]) * 0.35f;
+    float raw_r = (taps[1] + taps[3]) * 0.35f;
 
     /* High-frequency sparkle shelf: gentle boost to upper harmonics.
        One-pole highpass extracts HF content, blend it back in for brightness.
@@ -1906,8 +1899,9 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         if (inst->space > 0.001f) {
             float rev_out_l = 0.0f, rev_out_r = 0.0f;
             fdn_process(&inst->reverb, inst->reverb_mode, (dry_l + wet_l) * inst->space, (dry_r + wet_r) * inst->space, &rev_out_l, &rev_out_r, inst->sustain);
-            wet_l += rev_out_l * inst->space;
-            wet_r += rev_out_r * inst->space;
+            float rev_level = inst->space * 0.8f;
+            wet_l += rev_out_l * rev_level;
+            wet_r += rev_out_r * rev_level;
         }
 
         /* 8. Mix dry/wet (Interrupt algorithm forces 100% wet during events) */
