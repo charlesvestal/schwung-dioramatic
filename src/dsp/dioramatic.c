@@ -18,8 +18,8 @@
  * ============================================================================ */
 
 #define SAMPLE_RATE 44100
-#define CAPTURE_SECONDS 12
-#define CAPTURE_SAMPLES (SAMPLE_RATE * CAPTURE_SECONDS)  /* 529200 — 12 seconds */
+#define CAPTURE_SECONDS 2
+#define CAPTURE_SAMPLES (SAMPLE_RATE * CAPTURE_SECONDS)  /* 88200 */
 #define MAX_GRAINS 32
 #define ENV_TABLE_SIZE 256
 
@@ -183,9 +183,6 @@ typedef struct {
 
     /* Per-line one-pole lowpass for damping */
     float lp_state[FDN_LINES];
-    /* Per-line DC blocker to prevent LF buildup */
-    float dc_state[FDN_LINES];
-    float dc_prev[FDN_LINES];
 
     /* Input allpass diffusers */
     float ap_buf[FDN_NUM_AP][FDN_AP_MAX];
@@ -199,19 +196,17 @@ typedef struct {
     /* Delay line modulation for chorus-like movement in the tail */
     float mod_phase[FDN_LINES];
 
-    /* Shimmer: TWO pitch shifters in the feedback path.
-       Shifter A: octave up (2x) — the main cascade
-       Shifter B: fifth up (1.5x) — adds harmonic richness
-       Together they create a shimmering chord that builds each cycle. */
+    /* Shimmer: octave-up pitch shift in the feedback path.
+       Two overlapping grains read at 2x speed, crossfaded with Hann window.
+       This is the Eno/Lanois technique — creates cascading harmonics
+       that build up in the reverb tail like a crystal cave. */
     float shimmer_buf[SHIMMER_BUF_SIZE];
     int shimmer_write_pos;
-    float shimmer_read_phase_a;   /* octave-up reader (2x) */
-    float shimmer_fifth_phase;    /* fifth-up reader (1.5x) — adds harmonic richness */
+    float shimmer_read_phase_a;  /* grain A read position (fractional) */
+    float shimmer_read_phase_b;  /* grain B read position (offset by half grain) */
 
     /* High shelf state for sparkle boost */
     float sparkle_state_l, sparkle_state_r;
-    /* Harmonic exciter state */
-    float exciter_lp;
 } fdn_reverb_t;
 
 typedef struct {
@@ -339,34 +334,6 @@ typedef struct {
     float crossfade_level;       /* 1.0 -> 0.0 (fade out old) then 0.0 -> 1.0 (fade in new) */
     int pending_algorithm;
     int pending_variation;
-
-    /* Track where the loud content is in the capture buffer.
-       Grains should read from these "hot spots" — not random positions
-       that might contain silence or reverb wash. */
-    int hot_positions[16];   /* ring buffer of positions where energy was high */
-    int hot_write;
-    int hot_count;
-    int hot_timer;
-
-    /* Transient-triggered grain scatter */
-    float scatter_energy;
-    float scatter_energy_slow;
-    int scatter_origin;
-    int scatter_debounce;
-
-    /* Up to 4 overlapping scatter waves, each at different density */
-    #define MAX_SCATTER_WAVES 4
-    struct {
-        int active;
-        int remaining;
-        int timer;
-        int interval;
-        int total;          /* how many grains this wave started with */
-        float amp_scale;    /* amplitude multiplier for this wave */
-    } scatter_waves[4];
-
-    /* Input highpass — removes rumble before capture buffer */
-    float in_hp_l, in_hp_r;
 
     /* MIDI clock */
     uint32_t midi_clock_tick_count;
@@ -516,9 +483,7 @@ static inline float svf_lowpass(svf_state_t *s, const dioramatic_instance_t *ins
 static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, float *out_l, float *out_r, float sustain_boost) {
     const reverb_preset_t *p = &reverb_presets[mode];
     /* Sustain boost: raise feedback beyond the preset value toward 0.998 */
-    /* Cap sustain boost — prevents feedback runaway */
-    float capped_boost = sustain_boost * 0.6f;
-    float effective_feedback = p->feedback + capped_boost * (0.998f - p->feedback);
+    float effective_feedback = p->feedback + sustain_boost * (0.998f - p->feedback);
 
     /* Pre-delay */
     float pd_l, pd_r;
@@ -551,7 +516,7 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     /* Read from delay lines with subtle modulation for lush chorus-like tail */
     float taps[FDN_LINES];
     static const float mod_rates[FDN_LINES] = {0.37f, 0.47f, 0.31f, 0.53f};  /* Hz, different per line */
-    float mod_depth = 6.0f + sustain_boost * 18.0f;  /* 6 to 24 samples — more sustain = more chorus */
+    static const float mod_depth = 12.0f;  /* samples of modulation excursion */
     for (int i = 0; i < FDN_LINES; i++) {
         /* Modulated read position — creates subtle pitch/time variation in the tail */
         float mod_offset = sinf(2.0f * (float)M_PI * rev->mod_phase[i]) * mod_depth;
@@ -599,7 +564,7 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     float grain_phase_b = fmodf((rev->shimmer_read_phase_a + phase_b_offset) / (float)SHIMMER_GRAIN_SIZE, 1.0f);
     float env_b = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * grain_phase_b));
 
-    float shimmer_octave = samp_a * env_a + samp_b * env_b;
+    float shimmer_out = samp_a * env_a + samp_b * env_b;
     rev->shimmer_read_phase_a += 2.0f;  /* 2x speed = octave up */
     /* Keep read phase from drifting too far from write */
     float dist = (float)rev->shimmer_write_pos - rev->shimmer_read_phase_a;
@@ -609,81 +574,22 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         if (rev->shimmer_read_phase_a < 0) rev->shimmer_read_phase_a += (float)SHIMMER_BUF_SIZE;
     }
 
-    /* Second shimmer voice: fifth up (1.5x) — adds harmonic richness.
-       Two grains at 1.5x speed, same Hann crossfade technique.
-       The fifth creates a major chord quality in the cascade. */
-    int rd_f1 = (int)rev->shimmer_fifth_phase;
-    float fr_f1 = rev->shimmer_fifth_phase - (float)rd_f1;
-    float sf1 = rev->shimmer_buf[rd_f1 & (SHIMMER_BUF_SIZE - 1)] * (1.0f - fr_f1)
-              + rev->shimmer_buf[(rd_f1 + 1) & (SHIMMER_BUF_SIZE - 1)] * fr_f1;
-    float ef1 = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * fmodf(rev->shimmer_fifth_phase / (float)SHIMMER_GRAIN_SIZE, 1.0f)));
-
-    float ph_f2 = rev->shimmer_fifth_phase + (float)(SHIMMER_GRAIN_SIZE / 2);
-    int rd_f2 = (int)ph_f2;
-    float fr_f2 = ph_f2 - (float)rd_f2;
-    float sf2 = rev->shimmer_buf[rd_f2 & (SHIMMER_BUF_SIZE - 1)] * (1.0f - fr_f2)
-              + rev->shimmer_buf[(rd_f2 + 1) & (SHIMMER_BUF_SIZE - 1)] * fr_f2;
-    float ef2 = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * fmodf(ph_f2 / (float)SHIMMER_GRAIN_SIZE, 1.0f)));
-
-    float shimmer_fifth = sf1 * ef1 + sf2 * ef2;
-    rev->shimmer_fifth_phase += 1.5f;  /* 1.5x = perfect fifth up */
-    while (rev->shimmer_fifth_phase >= (float)SHIMMER_BUF_SIZE)
-        rev->shimmer_fifth_phase -= (float)SHIMMER_BUF_SIZE;
-    float dist_f = (float)rev->shimmer_write_pos - rev->shimmer_fifth_phase;
-    if (dist_f < 0) dist_f += (float)SHIMMER_BUF_SIZE;
-    if (dist_f > (float)(SHIMMER_BUF_SIZE - SHIMMER_GRAIN_SIZE)) {
-        rev->shimmer_fifth_phase = (float)rev->shimmer_write_pos - (float)(SHIMMER_BUF_SIZE / 2);
-        if (rev->shimmer_fifth_phase < 0) rev->shimmer_fifth_phase += (float)SHIMMER_BUF_SIZE;
-    }
-
-    /* Combined shimmer: octave + fifth */
-    float shimmer_raw = shimmer_octave * 0.7f + shimmer_fifth * 0.3f;
-
-    /* HARMONIC EXCITER: generate sparkle harmonics above 8kHz.
-       Soft-clipping the shimmer output creates odd harmonics:
-       a 2kHz signal clipped generates 6kHz, 10kHz, 14kHz content.
-       THIS is what makes it sparkle — not just pitch shifting, but
-       generating NEW high-frequency content that wasn't in the input.
-       The tanh curve is gentle enough to sound musical, not harsh. */
-    float excited = tanhf(shimmer_raw * 3.0f) * 0.5f;
-    /* High-shelf boost: extract the generated harmonics */
-    float exciter_hp = excited - rev->exciter_lp;
-    rev->exciter_lp += 0.3f * exciter_hp;  /* ~2kHz crossover */
-    float sparkle_hf = exciter_hp * 0.4f;  /* just the high harmonics */
-
-    float shimmer_out = shimmer_raw + sparkle_hf;
-
     /* Shimmer: low levels prevent runaway — even small amounts cascade
        into rich harmonics because the reverb feedback is already high */
-    /* Shimmer levels boosted for more dramatic cascade.
-       The fifth voice adds richness so the total shimmer is lusher. */
-    static const float shimmer_amounts[4] = {0.06f, 0.09f, 0.13f, 0.18f};
+    static const float shimmer_amounts[4] = {0.03f, 0.04f, 0.06f, 0.08f};
     float shimmer_level = shimmer_amounts[mode];
 
-    /* Apply feedback, damping, DC removal, shimmer, and write back */
+    /* Apply feedback, damping, shimmer injection, and write back */
     for (int i = 0; i < FDN_LINES; i++) {
         float fb = mixed[i] * effective_feedback;
-        /* One-pole lowpass damping (removes highs) */
+        /* One-pole lowpass damping */
         rev->lp_state[i] += p->damping * (fb - rev->lp_state[i]);
         fb = rev->lp_state[i];
-        /* DC blocker in feedback — prevents low-frequency buildup that
-           turns into a drone at high feedback/space settings.
-           One-pole highpass at ~20Hz. */
-        float dc = fb - rev->dc_state[i] + 0.997f * rev->dc_prev[i];
-        rev->dc_state[i] = fb;
-        rev->dc_prev[i] = dc;
-        fb = dc;
-        /* Inject shimmer with stereo spread — octave biased L, fifth biased R.
-           This creates a wide crystalline stereo image in the reverb tail. */
-        float shim_inject;
-        if (i < 2)
-            shim_inject = (shimmer_octave * 0.8f + shimmer_fifth * 0.2f) * shimmer_level;
-        else
-            shim_inject = (shimmer_octave * 0.2f + shimmer_fifth * 0.8f) * shimmer_level;
-        fb += shim_inject;
-        /* Soft limiter — tanh is smooth, hard clamp causes distortion */
-        if (fb > 0.6f || fb < -0.6f)
-            fb = tanhf(fb) * 0.95f;
+        /* Inject shimmer — cascading crystalline harmonics */
+        fb += shimmer_out * shimmer_level;
+        /* Safety limiter prevents runaway buildup */
+        if (fb > 0.9f) fb = 0.9f;
+        else if (fb < -0.9f) fb = -0.9f;
         /* Write with input */
         rev->lines[i][rev->write_pos[i]] = diff_in + fb;
         rev->write_pos[i] = (rev->write_pos[i] + 1) & (FDN_MAX_DELAY - 1);
@@ -1537,21 +1443,17 @@ static void delay_configure_taps_if_dirty(dioramatic_instance_t *inst) {
    Each knob fades in a specific grain behavior from the algorithms you liked.
    The grain functions are called with internal params set by the knob mapping. */
 static void algorithm_tick(dioramatic_instance_t *inst) {
-    /* Smear: Haze A micro-grain cloud (density from smear knob).
-       Also scales grain amplitude with the knob. */
+    /* Smear: Haze A micro-grain cloud (density from smear knob) */
     if (inst->smear > 0.05f) {
         inst->algorithm = 3; inst->variation = 0;
         inst->activity = inst->smear;
-        inst->repeats = inst->sustain * inst->smear;  /* amplitude scales with knob */
         haze_tick(inst);
     }
 
-    /* Shimmer: Haze C octave-up shimmer grains.
-       At max shimmer this should be dramatic — clearly audible sparkle. */
+    /* Shimmer: Haze C octave-up shimmer grains */
     if (inst->shimmer > 0.05f) {
         inst->algorithm = 3; inst->variation = 2;
         inst->activity = inst->shimmer;
-        inst->repeats = 0.3f + inst->shimmer * 0.7f;  /* 0.3 to 1.0 — loud at max */
         haze_tick(inst);
     }
 
@@ -1575,67 +1477,6 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
         inst->algorithm = 4; inst->variation = 1;
         inst->activity = (inst->drift - 0.5f) * 2.0f;
         tunnel_tick(inst);
-    }
-
-    /* === WIND CHIME GRAINS ===
-       Continuous random sparkly pings — like an actual wind chime.
-       Not a burst. Not a scatter. Individual pings at random intervals,
-       each ringing through the reverb. Keeps going as long as there's
-       audio in the capture buffer to read from.
-
-       Scatter controls the average rate of pings.
-       Shimmer biases toward higher pitches.
-       The randomized timing is what makes it sound natural. */
-
-    /* Check every sample with a probability gate — creates irregular timing */
-    {
-        /* Average rate: scatter 0 = ~2 pings/sec, scatter 1 = ~12 pings/sec */
-        float pings_per_sec = 2.0f + inst->scatter * 10.0f;
-        float prob_per_sample = pings_per_sec / (float)SAMPLE_RATE;
-
-        if (rng_float(&inst->rng_state) < prob_per_sample) {
-            int wp = inst->capture.write_pos;
-
-            /* Pick speed — octave-aligned intervals for crystal cascade.
-               Includes fifths at high shimmer for harmonic richness. */
-            float r = rng_float(&inst->rng_state);
-            float speed;
-            if (inst->shimmer > 0.5f) {
-                /* High shimmer: more variety, more highs */
-                float speeds[] = {1.0f, 1.5f, 2.0f, 2.0f, 3.0f, 4.0f};
-                speed = speeds[(int)(r * 6.0f) % 6];
-            } else if (inst->shimmer > 0.2f) {
-                speed = (r < 0.15f) ? 1.0f : (r < 0.35f) ? 1.5f : (r < 0.65f) ? 2.0f : 4.0f;
-            } else {
-                speed = (r < 0.4f) ? 1.0f : (r < 0.8f) ? 2.0f : 4.0f;
-            }
-
-            /* Grain length from smear */
-            float len_ms = 15.0f + inst->smear * 80.0f + rng_float(&inst->rng_state) * 20.0f;
-
-            /* Read from HOT SPOTS — positions where there was actual music.
-               This ensures grains always play back musical content, not
-               silence or reverb wash. Each grain picks a random hot spot
-               with a small random offset for variation. */
-            int start;
-            if (inst->hot_count > 0) {
-                int idx = (int)(rng_float(&inst->rng_state) * (float)inst->hot_count);
-                int base = inst->hot_positions[(inst->hot_write - 1 - idx + 16) & 15];
-                int offset = (int)(rng_float(&inst->rng_state) * 4410.0f) - 2205;
-                start = (base + offset + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-            } else {
-                int recent = (int)(SAMPLE_RATE * 0.5f);
-                start = (wp - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-            }
-            int len = (int)(SAMPLE_RATE * len_ms / 1000.0f);
-            if (len < 128) len = 128;
-
-            grain_t *gr = find_free_grain(inst);
-            if (gr) {
-                init_grain_common(gr, inst, start, len, speed);
-                gr->amplitude = 0.5f + inst->sustain * 0.3f;
-            }
-        }
     }
 }
 
@@ -1722,11 +1563,9 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
        This drives the existing grain algorithms and reverb exactly as
        they worked in the version that sounded good. */
 
-    /* Space → reverb mode. Bias toward larger modes earlier so
-       even moderate space has a real tail. */
-    inst->reverb_mode = (int)(inst->space * 2.0f + 1.0f);  /* 1 at space=0, 3 at space=1 */
+    /* Space → reverb mode (continuous blend via index) + send level */
+    inst->reverb_mode = (int)(inst->space * 3.0f);
     if (inst->reverb_mode > 3) inst->reverb_mode = 3;
-    if (inst->reverb_mode < 0) inst->reverb_mode = 0;
 
     /* Warmth → filter cutoff (inverted: more warmth = lower cutoff) */
     inst->filter = 1.0f - inst->warmth * 0.8f;  /* 1.0 (bright) to 0.2 (warm) */
@@ -1799,36 +1638,10 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         float dry_l = (float)audio_inout[i * 2] / 32768.0f;
         float dry_r = (float)audio_inout[i * 2 + 1] / 32768.0f;
 
-        /* 1b. Input highpass — removes rumble from what grains and reverb see.
-               Dry output stays full-range. Only the wet path gets cleaned.
-               Warmth 0 = HP at ~150Hz (bright, sparkly)
-               Warmth 1 = HP at ~20Hz (keeps full body) */
+        /* 2. Write to capture buffer */
         int wp = inst->capture.write_pos;
-        {
-            /* More aggressive HP range: ~300Hz (bright) to ~40Hz (warm) */
-            float hp_c = 0.993f - (1.0f - inst->warmth) * 0.02f;
-            float new_hp_l = hp_c * inst->in_hp_l + dry_l - hp_c * dry_l;
-            float new_hp_r = hp_c * inst->in_hp_r + dry_r - hp_c * dry_r;
-            float cap_l = dry_l * inst->warmth + new_hp_l * (1.0f - inst->warmth);
-            float cap_r = dry_r * inst->warmth + new_hp_r * (1.0f - inst->warmth);
-            inst->in_hp_l = new_hp_l;
-            inst->in_hp_r = new_hp_r;
-            inst->capture.buffer[wp].l = cap_l;
-            inst->capture.buffer[wp].r = cap_r;
-        }
-
-        /* Track hot spots — positions where there's actual musical content.
-           Record a position every ~50ms when input is loud enough. */
-        inst->hot_timer++;
-        if (inst->hot_timer >= 2205) {
-            inst->hot_timer = 0;
-            float energy = dry_l * dry_l + dry_r * dry_r;
-            if (energy > 0.001f) {
-                inst->hot_positions[inst->hot_write] = wp;
-                inst->hot_write = (inst->hot_write + 1) & 15;
-                if (inst->hot_count < 16) inst->hot_count++;
-            }
-        }
+        inst->capture.buffer[wp].l = dry_l;
+        inst->capture.buffer[wp].r = dry_r;
 
         /* 2b. Hold/Freeze: feed hold buffer into capture buffer so grains re-process it */
         if (inst->hold_state.active) {
@@ -2035,14 +1848,12 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         wet_l = svf_lowpass(&inst->svf_l, inst, wet_l);
         wet_r = svf_lowpass(&inst->svf_r, inst, wet_r);
 
-        /* 7. FDN reverb send/return.
-              Send has a floor so even low space has some reverb. */
-        {
-            float rev_send = 0.3f + inst->space * 0.7f;  /* 0.3 to 1.0 */
+        /* 7. FDN reverb send/return */
+        if (inst->space > 0.001f) {
             float rev_out_l = 0.0f, rev_out_r = 0.0f;
-            fdn_process(&inst->reverb, inst->reverb_mode, (dry_l + wet_l) * rev_send, (dry_r + wet_r) * rev_send, &rev_out_l, &rev_out_r, inst->sustain);
-            wet_l += rev_out_l * rev_send;
-            wet_r += rev_out_r * rev_send;
+            fdn_process(&inst->reverb, inst->reverb_mode, (dry_l + wet_l) * inst->space, (dry_r + wet_r) * inst->space, &rev_out_l, &rev_out_r, inst->sustain);
+            wet_l += rev_out_l * inst->space;
+            wet_r += rev_out_r * inst->space;
         }
 
         /* 8. Mix dry/wet (Interrupt algorithm forces 100% wet during events) */
