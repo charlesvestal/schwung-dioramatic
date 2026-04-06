@@ -593,15 +593,20 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     static const float shimmer_amounts[4] = {0.05f, 0.07f, 0.10f, 0.14f};
     float shimmer_level = shimmer_amounts[mode];
 
-    /* Apply feedback, damping, shimmer injection, and write back */
+    /* Apply feedback with SPLIT damping:
+       The reverb body gets damped (highs decay naturally).
+       The shimmer sparkle BYPASSES the damping — it stays bright
+       through every cycle, creating persistent high-frequency content
+       that cascades upward. This is what creates real sparkle. */
     for (int i = 0; i < FDN_LINES; i++) {
         float fb = mixed[i] * effective_feedback;
-        /* One-pole lowpass damping */
+        /* Damped path: reverb body (warm, natural decay) */
         rev->lp_state[i] += p->damping * (fb - rev->lp_state[i]);
-        fb = rev->lp_state[i];
-        /* Inject shimmer — cascading crystalline harmonics */
-        fb += shimmer_out * shimmer_level;
-        /* Safety limiter prevents runaway buildup */
+        float fb_damped = rev->lp_state[i];
+        /* Lightly damped path: shimmer sparkle (keeps HF much longer than body) */
+        float fb_sparkle = shimmer_out * shimmer_level * 0.7f;
+        fb = fb_damped + fb_sparkle;
+        /* Safety limiter */
         if (fb > 0.9f) fb = 0.9f;
         else if (fb < -0.9f) fb = -0.9f;
         /* Write with input */
