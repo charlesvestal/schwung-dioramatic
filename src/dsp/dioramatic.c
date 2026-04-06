@@ -571,13 +571,13 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
        A 1kHz shimmer signal becomes 3kHz + 5kHz + 7kHz + 9kHz + ...
        Highpass keeps only the upper harmonics — the actual sparkle.
        This works regardless of input frequency. */
-    float driven = tanhf(shimmer_raw * 4.0f);
+    float driven = tanhf(shimmer_raw * 6.0f);
     /* One-pole highpass: extract only the generated upper harmonics */
-    rev->sparkle_state_l += 0.25f * (driven - rev->sparkle_state_l);
+    rev->sparkle_state_l += 0.2f * (driven - rev->sparkle_state_l);
     float sparkle_content = driven - rev->sparkle_state_l;
 
-    /* Blend: original shimmer + sparkle harmonics (scaled by shimmer level) */
-    float shimmer_out = shimmer_raw + sparkle_content * 0.3f;
+    /* Blend: original shimmer + lots of sparkle harmonics */
+    float shimmer_out = shimmer_raw + sparkle_content * 0.5f;
 
     rev->shimmer_read_phase_a += 2.0f;  /* 2x speed = octave up */
     /* Keep read phase from drifting too far from write */
@@ -590,7 +590,7 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
 
     /* Shimmer: low levels prevent runaway — even small amounts cascade
        into rich harmonics because the reverb feedback is already high */
-    static const float shimmer_amounts[4] = {0.05f, 0.07f, 0.10f, 0.14f};
+    static const float shimmer_amounts[4] = {0.07f, 0.10f, 0.15f, 0.20f};
     float shimmer_level = shimmer_amounts[mode];
 
     /* Apply feedback with SPLIT damping:
@@ -604,7 +604,7 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         rev->lp_state[i] += p->damping * (fb - rev->lp_state[i]);
         float fb_damped = rev->lp_state[i];
         /* Lightly damped path: shimmer sparkle (keeps HF much longer than body) */
-        float fb_sparkle = shimmer_out * shimmer_level * 0.7f;
+        float fb_sparkle = shimmer_out * shimmer_level * 0.45f;
         fb = fb_damped + fb_sparkle;
         /* Safety limiter */
         if (fb > 0.9f) fb = 0.9f;
@@ -1522,7 +1522,7 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
                 int len = 44 + (int)(rng_float(&inst->rng_state) * 88.0f);
                 if (len < 44) len = 44;
                 /* Speed: 4x or 8x — always very high */
-                float speed = rng_float(&inst->rng_state) < 0.5f ? 4.0f : 8.0f;
+                float speed = rng_float(&inst->rng_state) < 0.3f ? 4.0f : 8.0f;
                 init_grain_common(g, inst, start, len, speed);
                 /* LOUD — poke above the reverb wash */
                 g->amplitude = 0.7f + inst->shimmer * 0.3f;
