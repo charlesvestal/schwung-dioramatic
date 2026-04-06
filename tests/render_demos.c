@@ -470,7 +470,7 @@ static void render_preset(audio_fx_api_v2_t *api, const preset_t *preset,
 int main(void) {
     audio_fx_api_v2_t *api = move_audio_fx_init_v2(&th);
 
-    const char *output_dir = "/Users/charlesvestal/Desktop/dioramatic-demos-v5";
+    const char *output_dir = "/Users/charlesvestal/Desktop/dioramatic-demos-v8";
 
     /* Create output directory */
     char cmd[256];
@@ -534,6 +534,11 @@ int main(void) {
          "{\"space\":0.90,\"shimmer\":0.50,\"smear\":0.60,\"warmth\":0.45,\"drift\":0.80,\"sustain\":0.88,\"scatter\":0.60,\"mix\":0.85}"},
         {"tight-shimmer",
          "{\"space\":0.35,\"shimmer\":0.60,\"smear\":0.20,\"warmth\":0.30,\"drift\":0.20,\"sustain\":0.70,\"scatter\":0.30,\"mix\":0.60}"},
+        /* Diagnostic: isolate reverb vs grains */
+        {"diag-reverb-only",
+         "{\"space\":0.85,\"shimmer\":0.40,\"smear\":0.00,\"warmth\":0.45,\"drift\":0.00,\"sustain\":0.85,\"scatter\":0.00,\"mix\":0.80}"},
+        {"diag-grains-only",
+         "{\"space\":0.00,\"shimmer\":0.00,\"smear\":0.85,\"warmth\":0.45,\"drift\":0.40,\"sustain\":0.00,\"scatter\":0.50,\"mix\":0.80}"},
     };
 
     int num_presets = sizeof(presets) / sizeof(presets[0]);

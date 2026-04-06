@@ -207,8 +207,9 @@ typedef struct {
     float shimmer_jitter;        /* slow random drift to break periodicity */
     uint32_t shimmer_rng;        /* RNG state for jitter */
 
-    /* High shelf state for sparkle boost */
-    float sparkle_state_l, sparkle_state_r;
+    /* Filter states — shimmer HF extraction and output sparkle shelf */
+    float shimmer_lp_state;             /* lowpass for shimmer HF extraction */
+    float sparkle_state_l, sparkle_state_r;  /* output sparkle shelf */
 } fdn_reverb_t;
 
 typedef struct {
@@ -484,12 +485,14 @@ static inline float svf_lowpass(svf_state_t *s, const dioramatic_instance_t *ins
 
 static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, float *out_l, float *out_r, float sustain_boost) {
     const reverb_preset_t *p = &reverb_presets[mode];
-    /* Sustain boost: raise feedback toward 0.995 with a sqrt curve.
-       Linear mapping pushes too close to 1.0 at high sustain, causing blowout.
-       sqrt(0.88) = 0.938 instead of 0.88 → gentler at extremes, still long tails.
-       Cap at 0.995 instead of 0.998 to leave headroom for shimmer energy. */
+    /* Sustain boost: raise feedback with a sqrt curve, capping at 0.95.
+       At feedback > ~0.95, the reverb's internal signal exceeds the limiter
+       threshold (0.9) during sustained input, causing continuous nonlinear
+       distortion. 0.95 gives very long tails without limiter engagement. */
+    float max_fb = 0.95f;
     float sb = sqrtf(sustain_boost);
-    float effective_feedback = p->feedback + sb * (0.995f - p->feedback);
+    float effective_feedback = p->feedback + sb * (max_fb - p->feedback);
+    if (effective_feedback > max_fb) effective_feedback = max_fb;
 
     /* Pre-delay */
     float pd_l, pd_r;
@@ -575,8 +578,8 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     /* SPARKLE: high-shelf boost on shimmer — emphasizes existing HF content
        without creating waveshaper distortion harmonics in the feedback loop.
        One-pole lowpass extracts bass; subtract to get treble; blend back. */
-    rev->sparkle_state_l += 0.12f * (shimmer_raw - rev->sparkle_state_l);
-    float shimmer_hf = shimmer_raw - rev->sparkle_state_l;  /* HF content */
+    rev->shimmer_lp_state += 0.12f * (shimmer_raw - rev->shimmer_lp_state);
+    float shimmer_hf = shimmer_raw - rev->shimmer_lp_state;  /* HF content */
     float shimmer_out = shimmer_raw + shimmer_hf * 0.6f;  /* boost treble by 60% */
 
     rev->shimmer_read_phase += 2.0f;  /* 2x speed = octave up */
@@ -1898,8 +1901,14 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         /* 7. FDN reverb send/return */
         if (inst->space > 0.001f) {
             float rev_out_l = 0.0f, rev_out_r = 0.0f;
-            fdn_process(&inst->reverb, inst->reverb_mode, (dry_l + wet_l) * inst->space, (dry_r + wet_r) * inst->space, &rev_out_l, &rev_out_r, inst->sustain);
-            float rev_level = inst->space * 0.8f;
+            /* Scale reverb input so steady-state level stays below the internal
+               limiter even at max feedback (0.95). At fb=0.95, gain=1/(1-0.95)=20x,
+               so input * 20 must stay under 0.9 → input under 0.045.
+               With space=1.0 and typical input ~0.3, we need ~0.15x scaling. */
+            float rev_in_scale = inst->space * 0.15f;
+            fdn_process(&inst->reverb, inst->reverb_mode, (dry_l + wet_l) * rev_in_scale, (dry_r + wet_r) * rev_in_scale, &rev_out_l, &rev_out_r, inst->sustain);
+            /* Compensate for reduced input: boost output to restore perceived level */
+            float rev_level = inst->space * 3.0f;
             wet_l += rev_out_l * rev_level;
             wet_r += rev_out_r * rev_level;
         }
