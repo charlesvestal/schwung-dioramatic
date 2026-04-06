@@ -1503,24 +1503,31 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
        These are the actual sparkle — rare, bright, individual events
        that cut through the reverb wash. Controlled by Shimmer knob.
        Random timing makes them sound like light catching crystals. */
+    /* === HIGH SPARKLE PINGS ===
+       Rare, LOUD, very short, very high pitched.
+       These must stand out above the grain wash — not blend into it.
+       Fewer but brighter = more distinct. */
     if (inst->shimmer > 0.1f) {
-        /* Rate: 1-6 pings per second based on shimmer */
-        float ping_rate = 1.0f + inst->shimmer * 5.0f;
+        /* Rate: 0.5-3 pings per second — RARE so each one is an event */
+        float ping_rate = 0.5f + inst->shimmer * 2.5f;
         float ping_prob = ping_rate / (float)SAMPLE_RATE;
 
         if (rng_float(&inst->rng_state) < ping_prob) {
             grain_t *g = find_free_grain(inst);
             if (g) {
                 int wp = inst->capture.write_pos;
-                /* Read from recent audio — short grain, very high pitch */
-                int recent = (int)(SAMPLE_RATE * 0.1f + rng_float(&inst->rng_state) * SAMPLE_RATE * 0.5f);
+                int recent = (int)(SAMPLE_RATE * 0.1f + rng_float(&inst->rng_state) * SAMPLE_RATE * 0.4f);
                 int start = (wp - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
-                /* Very short: 3-8ms — a bright ping, not a smear */
-                int len = 132 + (int)(rng_float(&inst->rng_state) * 220.0f);
-                /* Speed: 4x (2 octaves up) or 8x (3 octaves up) */
-                float speed = rng_float(&inst->rng_state) < 0.6f ? 4.0f : 8.0f;
+                /* VERY short: 1-3ms — a transient click/ping, not a tone */
+                int len = 44 + (int)(rng_float(&inst->rng_state) * 88.0f);
+                if (len < 44) len = 44;
+                /* Speed: 4x or 8x — always very high */
+                float speed = rng_float(&inst->rng_state) < 0.5f ? 4.0f : 8.0f;
                 init_grain_common(g, inst, start, len, speed);
-                g->amplitude = 0.3f + inst->shimmer * 0.4f;
+                /* LOUD — poke above the reverb wash */
+                g->amplitude = 0.7f + inst->shimmer * 0.3f;
+                /* Wide stereo */
+                g->pan = (rng_float(&inst->rng_state) - 0.5f) * 1.8f;
             }
         }
     }
