@@ -653,8 +653,13 @@ static grain_t *find_free_grain(dioramatic_instance_t *inst) {
 
 static void init_grain_common(grain_t *g, dioramatic_instance_t *inst, int start, int length, float speed) {
     g->active = 1;
+    /* Ensure start is at least 1024 samples behind write head to avoid
+       reading the discontinuity at the write position */
+    int dist = (inst->capture.write_pos - start + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+    if (dist < 1024) start = (inst->capture.write_pos - 1024 + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
     g->start = start;
     g->length = length;
+    if (g->length < 128) g->length = 128;  /* minimum to avoid click */
     g->env_inc = 1.0f / (float)length;
     g->env_phase = 0.0f;
     g->position = 0.0f;
@@ -1513,8 +1518,8 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
                 int start = (wp - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
                 /* Short but not clicking: 5-15ms — bright ping with smooth envelope */
                 int len = 220 + (int)(rng_float(&inst->rng_state) * 440.0f);
-                /* Speed: 4x or 8x — always very high */
-                float speed = rng_float(&inst->rng_state) < 0.3f ? 4.0f : 8.0f;
+                /* Speed: 4x (2 octaves up) — no 8x to avoid aliasing clicks */
+                float speed = 4.0f;
                 init_grain_common(g, inst, start, len, speed);
                 /* LOUD — poke above the reverb wash */
                 g->amplitude = 0.7f + inst->shimmer * 0.3f;
