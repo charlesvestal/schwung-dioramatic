@@ -514,8 +514,8 @@ static inline float svf_lowpass(svf_state_t *s, const dioramatic_instance_t *ins
 static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, float *out_l, float *out_r, float sustain_boost) {
     const reverb_preset_t *p = &reverb_presets[mode];
     /* Sustain boost: raise feedback beyond the preset value toward 0.998 */
-    /* Cap sustain boost at 0.75 — prevents runaway at extreme settings */
-    float capped_boost = sustain_boost * 0.75f;
+    /* Cap sustain boost — prevents feedback runaway */
+    float capped_boost = sustain_boost * 0.6f;
     float effective_feedback = p->feedback + capped_boost * (0.998f - p->feedback);
 
     /* Pre-delay */
@@ -1789,7 +1789,8 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
                Warmth 1 = HP at ~20Hz (keeps full body) */
         int wp = inst->capture.write_pos;
         {
-            float hp_c = 0.99f - (1.0f - inst->warmth) * 0.008f;
+            /* More aggressive HP range: ~300Hz (bright) to ~40Hz (warm) */
+            float hp_c = 0.993f - (1.0f - inst->warmth) * 0.02f;
             float new_hp_l = hp_c * inst->in_hp_l + dry_l - hp_c * dry_l;
             float new_hp_r = hp_c * inst->in_hp_r + dry_r - hp_c * dry_r;
             float cap_l = dry_l * inst->warmth + new_hp_l * (1.0f - inst->warmth);
