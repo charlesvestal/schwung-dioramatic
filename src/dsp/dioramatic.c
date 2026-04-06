@@ -1497,6 +1497,33 @@ static void algorithm_tick(dioramatic_instance_t *inst) {
         inst->activity = (inst->drift - 0.5f) * 2.0f;
         tunnel_tick(inst);
     }
+
+    /* === HIGH SPARKLE PINGS ===
+       Individual bright grains at 2-octave-up (4x) and 3-octave-up (8x).
+       These are the actual sparkle — rare, bright, individual events
+       that cut through the reverb wash. Controlled by Shimmer knob.
+       Random timing makes them sound like light catching crystals. */
+    if (inst->shimmer > 0.1f) {
+        /* Rate: 1-6 pings per second based on shimmer */
+        float ping_rate = 1.0f + inst->shimmer * 5.0f;
+        float ping_prob = ping_rate / (float)SAMPLE_RATE;
+
+        if (rng_float(&inst->rng_state) < ping_prob) {
+            grain_t *g = find_free_grain(inst);
+            if (g) {
+                int wp = inst->capture.write_pos;
+                /* Read from recent audio — short grain, very high pitch */
+                int recent = (int)(SAMPLE_RATE * 0.1f + rng_float(&inst->rng_state) * SAMPLE_RATE * 0.5f);
+                int start = (wp - recent + CAPTURE_SAMPLES) % CAPTURE_SAMPLES;
+                /* Very short: 3-8ms — a bright ping, not a smear */
+                int len = 132 + (int)(rng_float(&inst->rng_state) * 220.0f);
+                /* Speed: 4x (2 octaves up) or 8x (3 octaves up) */
+                float speed = rng_float(&inst->rng_state) < 0.6f ? 4.0f : 8.0f;
+                init_grain_common(g, inst, start, len, speed);
+                g->amplitude = 0.3f + inst->shimmer * 0.4f;
+            }
+        }
+    }
 }
 
 /* ============================================================================
