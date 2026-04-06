@@ -173,8 +173,8 @@ typedef struct {
 #define FDN_AP_MAX 512
 
 /* Shimmer pitch shift buffer — simple granular octave-up in the reverb feedback */
-#define SHIMMER_BUF_SIZE 4096
-#define SHIMMER_GRAIN_SIZE 1024   /* ~23ms grain for smooth pitch shifting */
+#define SHIMMER_BUF_SIZE 16384  /* must be > 2x SHIMMER_GRAIN_SIZE */
+#define SHIMMER_GRAIN_SIZE 4096   /* longer = smoother crossfade, less clicking */   /* ~23ms grain for smooth pitch shifting */
 
 typedef struct {
     /* Delay lines */
@@ -564,11 +564,7 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     float grain_phase_b = fmodf((rev->shimmer_read_phase_a + phase_b_offset) / (float)SHIMMER_GRAIN_SIZE, 1.0f);
     float env_b = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * grain_phase_b));
 
-    /* Smooth the shimmer output to prevent the two-grain crossfade
-       from creating a pulsing/clicking pattern in the reverb tail */
-    float shimmer_raw_instant = samp_a * env_a + samp_b * env_b;
-    rev->sparkle_state_r += 0.3f * (shimmer_raw_instant - rev->sparkle_state_r);
-    float shimmer_raw = rev->sparkle_state_r;
+    float shimmer_raw = samp_a * env_a + samp_b * env_b;
 
     /* SPARKLE GENERATOR: create high-frequency harmonics from the shimmer.
        tanh(x*4) generates odd harmonics (3rd, 5th, 7th...) from any input.
