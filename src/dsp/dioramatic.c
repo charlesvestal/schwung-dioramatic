@@ -1462,33 +1462,26 @@ static void delay_configure_taps_if_dirty(dioramatic_instance_t *inst) {
    Each knob fades in a specific grain behavior from the algorithms you liked.
    The grain functions are called with internal params set by the knob mapping. */
 static void algorithm_tick(dioramatic_instance_t *inst) {
-    /* Smear: Haze A micro-grain cloud (density from smear knob) */
-    if (inst->smear > 0.05f) {
+    /* Smear: Haze A micro-grain cloud — VERY low density to avoid noise.
+       The reverb does the wash, grains just add texture. */
+    if (inst->smear > 0.1f) {
         inst->algorithm = 3; inst->variation = 0;
-        inst->activity = inst->smear;
+        inst->activity = inst->smear * 0.15f;  /* was 1:1 — now 15% */
         haze_tick(inst);
     }
 
-    /* Shimmer: Haze C octave-up shimmer grains */
-    if (inst->shimmer > 0.05f) {
+    /* Shimmer: Haze C octave-up grains — sparse, let reverb shimmer do the work */
+    if (inst->shimmer > 0.1f) {
         inst->algorithm = 3; inst->variation = 2;
-        inst->activity = inst->shimmer;
+        inst->activity = inst->shimmer * 0.1f;  /* was 1:1 — now 10% */
         haze_tick(inst);
     }
 
-    /* Scatter: Mosaic D cascading loops + Blocks C pitch sparkle */
-    if (inst->scatter > 0.05f) {
-        /* Mosaic: cascading overlapping loops at multiple speeds */
+    /* Scatter: Mosaic cascading loops — reduced density */
+    if (inst->scatter > 0.1f) {
         inst->algorithm = 0; inst->variation = 3;
-        inst->activity = inst->scatter;
+        inst->activity = inst->scatter * 0.2f;  /* was 1:1 — now 20% */
         mosaic_tick(inst);
-
-        /* Blocks C: occasional pitch-shifted sparkle events */
-        if (inst->scatter > 0.3f) {
-            inst->algorithm = 6; inst->variation = 2;
-            inst->activity = inst->scatter * 0.5f;
-            blocks_tick(inst);
-        }
     }
 
     /* Drift > 0.5: add Tunnel B overtone drones for sustained evolving texture */
