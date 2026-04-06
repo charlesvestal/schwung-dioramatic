@@ -564,7 +564,21 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     float grain_phase_b = fmodf((rev->shimmer_read_phase_a + phase_b_offset) / (float)SHIMMER_GRAIN_SIZE, 1.0f);
     float env_b = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * grain_phase_b));
 
-    float shimmer_out = samp_a * env_a + samp_b * env_b;
+    float shimmer_raw = samp_a * env_a + samp_b * env_b;
+
+    /* SPARKLE GENERATOR: create high-frequency harmonics from the shimmer.
+       tanh(x*4) generates odd harmonics (3rd, 5th, 7th...) from any input.
+       A 1kHz shimmer signal becomes 3kHz + 5kHz + 7kHz + 9kHz + ...
+       Highpass keeps only the upper harmonics — the actual sparkle.
+       This works regardless of input frequency. */
+    float driven = tanhf(shimmer_raw * 4.0f);
+    /* One-pole highpass: extract only the generated upper harmonics */
+    rev->sparkle_state_l += 0.25f * (driven - rev->sparkle_state_l);
+    float sparkle_content = driven - rev->sparkle_state_l;
+
+    /* Blend: original shimmer + sparkle harmonics (scaled by shimmer level) */
+    float shimmer_out = shimmer_raw + sparkle_content * 0.3f;
+
     rev->shimmer_read_phase_a += 2.0f;  /* 2x speed = octave up */
     /* Keep read phase from drifting too far from write */
     float dist = (float)rev->shimmer_write_pos - rev->shimmer_read_phase_a;
@@ -576,7 +590,7 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
 
     /* Shimmer: low levels prevent runaway — even small amounts cascade
        into rich harmonics because the reverb feedback is already high */
-    static const float shimmer_amounts[4] = {0.03f, 0.04f, 0.06f, 0.08f};
+    static const float shimmer_amounts[4] = {0.05f, 0.07f, 0.10f, 0.14f};
     float shimmer_level = shimmer_amounts[mode];
 
     /* Apply feedback, damping, shimmer injection, and write back */
