@@ -210,6 +210,8 @@ typedef struct {
 
     /* High shelf state for sparkle boost */
     float sparkle_state_l, sparkle_state_r;
+    /* Harmonic exciter state */
+    float exciter_lp;
 } fdn_reverb_t;
 
 typedef struct {
@@ -364,7 +366,7 @@ typedef struct {
     } scatter_waves[4];
 
     /* Input highpass — removes rumble before capture buffer */
-    float in_hp_l, in_hp_r;  /* one-pole HP state */
+    float in_hp_l, in_hp_r;
 
     /* MIDI clock */
     uint32_t midi_clock_tick_count;
@@ -634,8 +636,22 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         if (rev->shimmer_fifth_phase < 0) rev->shimmer_fifth_phase += (float)SHIMMER_BUF_SIZE;
     }
 
-    /* Combined shimmer: octave (bright cascade) + fifth (harmonic richness) */
-    float shimmer_out = shimmer_octave * 0.7f + shimmer_fifth * 0.3f;
+    /* Combined shimmer: octave + fifth */
+    float shimmer_raw = shimmer_octave * 0.7f + shimmer_fifth * 0.3f;
+
+    /* HARMONIC EXCITER: generate sparkle harmonics above 8kHz.
+       Soft-clipping the shimmer output creates odd harmonics:
+       a 2kHz signal clipped generates 6kHz, 10kHz, 14kHz content.
+       THIS is what makes it sparkle — not just pitch shifting, but
+       generating NEW high-frequency content that wasn't in the input.
+       The tanh curve is gentle enough to sound musical, not harsh. */
+    float excited = tanhf(shimmer_raw * 3.0f) * 0.5f;
+    /* High-shelf boost: extract the generated harmonics */
+    float exciter_hp = excited - rev->exciter_lp;
+    rev->exciter_lp += 0.3f * exciter_hp;  /* ~2kHz crossover */
+    float sparkle_hf = exciter_hp * 0.4f;  /* just the high harmonics */
+
+    float shimmer_out = shimmer_raw + sparkle_hf;
 
     /* Shimmer: low levels prevent runaway — even small amounts cascade
        into rich harmonics because the reverb feedback is already high */
