@@ -78,9 +78,10 @@ const N=8192;this.N=N;this.NM=N-1;
 this.L=[];this.LP=[];this.LLP=[];this.LM=[];this.LDC=[];this.LDCP=[];
 for(let i=0;i<4;i++){this.L.push(new Float32Array(N));this.LP.push(0);this.LLP.push(0);this.LM.push(0);this.LDC.push(0);this.LDCP.push(0)}
 this.AL=[241,173,419,313];this.AB=this.AL.map(l=>new Float32Array(l));this.AP=[0,0,0,0];
-/* Shimmer pitch shift */
-const SB=4096;this.SB=SB;this.SBM=SB-1;
+/* 4-grain shimmer pitch shift — matches C v0.4.1 */
+const SB=32768;this.SB=SB;this.SBM=SB-1;
 this.shimBuf=new Float32Array(SB);this.shimW=0;this.shimR=0;
+this.shimLP=0; /* separate LP state for shimmer HF extraction */
 /* SVF */
 this.svfL={i1:0,i2:0};this.svfR={i1:0,i2:0};
 /* LFO */
@@ -93,6 +94,8 @@ this.prevWL=0;this.prevWR=0;this.gtHpL=0;this.gtHpR=0;
 this.hotPos=new Int32Array(16);this.hotW=0;this.hotN=0;this.hotT=0;
 /* Smoothed space value to prevent clicks when turning the knob */
 this.spaceSmooth=this.space;
+/* Output sparkle shelf states */
+this.spkL=0;this.spkR=0;
 this.rng=12345;this.pk=0;this.mc=0;
 this.port.onmessage=e=>{const p=e.data;
 for(const k of['space','shimmer','smear','warmth','drift','sustain','scatter','mix','graintail'])
@@ -108,13 +111,17 @@ process(ins,outs){
 const I=ins[0],O=outs[0];if(!I||!I[0])return true;
 const iL=I[0],iR=I[1]||I[0],oL=O[0],oR=O[1]||O[0],F=oL.length;
 const S=this.S,CS=this.capSize,N=this.N,NM=this.NM;
-/* Knob → param mapping (matches C exactly) */
-const mode=Math.min(3,Math.max(0,Math.floor(this.space*2+1)));
-const revSend=.3+this.space*.7;
-/* Reverb presets: [feedback, damping, shimmer_amount] per mode */
-const presets=[[.72,.25,.05],[.80,.65,.07],[.88,.45,.10],[.95,.55,.14]];
-const pFb=presets[mode][0],pDmp=presets[mode][1],shimAmt=presets[mode][2];
-const effFb=Math.min(.998,pFb+this.sustain*.75*(.998-pFb));
+/* Knob → param mapping (matches C v0.4.1) */
+const mode=Math.min(3,Math.max(0,Math.floor(this.space*3)));
+/* Reverb presets: [feedback, damping, shimmer_amount, sparkle_amount] per mode */
+const presets=[[.72,.25,.07,.15],[.80,.65,.10,.05],[.88,.45,.15,.20],[.95,.55,.20,.25]];
+const pFb=presets[mode][0],pDmp=presets[mode][1],shimAmt=presets[mode][2],spkAmt=presets[mode][3];
+/* Feedback: sqrt curve, capped at 0.95 to prevent internal limiter saturation */
+const sb=Math.sqrt(this.sustain);
+const effFb=Math.min(.95,pFb+sb*(.95-pFb));
+/* Shimmer headroom scaling — reduce shimmer as feedback approaches 1.0 */
+const headroom=1-effFb;
+const shimScale=Math.min(1,headroom*10);
 const cut=Math.min(20000,200*Math.pow(100,1-this.warmth));
 const sg=Math.tan(Math.PI*cut/S),sk=2-.19;
 const a1=1/(1+sg*(sg+sk)),a2=sg*a1,a3=sg*a2;
@@ -129,11 +136,7 @@ const mosInt=this.scatter>.05?Math.max(128,Math.floor(22050/(3+this.scatter*6)))
 const chimePPS=2+this.scatter*10;const chimeProb=chimePPS/S;
 for(let i=0;i<F;i++){
 const dL=iL[i]*.7,dR=iR[i]*.7;
-/* Grain tail: feed reverb output back into capture buffer.
-   Grains read from it, so they keep finding audio to play even after input stops.
-   Linear 0 to 0.5 — slide until grains sustain as long as you want. */
-/* Grain tail: scales down when space+shimmer are high to prevent
-   compound feedback (reverb shimmer + grain tail = exponential HF buildup) */
+/* Grain tail feedback — HF filtered, scaled down at high space*shimmer */
 const gtScale=Math.max(0.005,0.03*(1-this.space*this.shimmer*0.8));
 const gtFb=this.graintail*gtScale;
 const hpL=this.prevWL-this.gtHpL;this.gtHpL+=0.05*hpL;
@@ -179,7 +182,6 @@ this.tg((st+Math.floor(this.R()*441))%CS,shG,2,.2+this.sustain*.15,pw*.8)}}
 if(this.R()<chimeProb){
 const r=this.R();const sp=this.shimmer>.3?(r<.1?1:r<.5?2:4):(r<.3?1:r<.7?2:4);
 const lenMs=15+this.smear*80+this.R()*20;
-/* Read from hot spots — where the actual music was */
 let st;
 if(this.hotN>0){const idx=Math.floor(this.R()*this.hotN);
 const base=this.hotPos[(this.hotW-1-idx+16)&15];
@@ -191,7 +193,6 @@ let wL=0,wR=0;
 for(let g of this.grains){if(!g.a)continue;
 const idx=Math.floor(g.st+g.pos);const fr=(g.st+g.pos)-idx;
 const i0=((idx%CS)+CS)%CS;const i1=(i0+1)%CS;
-/* Skip if reading too close to write head — prevents discontinuity clicks */
 const dist=((wp-i0)%CS+CS)%CS;
 if(dist<256){g.a=0;continue}
 const sL=this.capL[i0]*(1-fr)+this.capL[i1]*fr;
@@ -207,8 +208,10 @@ this.svfL.i1=2*v1-this.svfL.i1;this.svfL.i2=2*v2-this.svfL.i2;wL=v2}
 let v2=this.svfR.i2+a2*this.svfR.i1+a3*v3;
 this.svfR.i1=2*v1-this.svfR.i1;this.svfR.i2=2*v2-this.svfR.i2;wR=v2}
 /* === FDN REVERB === */
-if(revSend>.01){
-let df=(dL+dR+wL+wR)*.5*revSend;
+if(this.space>.001){
+/* Reduced reverb input (0.15x) prevents internal limiter saturation */
+const revIn=(dL+dR+wL+wR)*.5*this.space*.15;
+let df=revIn;
 for(let a=0;a<4;a++){const d=this.AB[a][this.AP[a]];const o=d-.5*df;
 this.AB[a][this.AP[a]]=df+.5*o;df=o;this.AP[a]=(this.AP[a]+1)%this.AL[a]}
 /* Smooth space to avoid clicks from delay length jumps */
@@ -226,33 +229,55 @@ tp[l]=this.L[l][p0]*(1-rf)+this.L[l][p1]*rf;
 this.LM[l]+=mR[l]/S;if(this.LM[l]>=1)this.LM[l]-=1}
 const mx=[.5*(tp[0]+tp[1]+tp[2]+tp[3]),.5*(tp[0]-tp[1]+tp[2]-tp[3]),
 .5*(tp[0]+tp[1]-tp[2]-tp[3]),.5*(tp[0]-tp[1]-tp[2]+tp[3])];
-/* Shimmer pitch shift */
+/* 4-grain shimmer pitch shift (octave up) — matches C v0.4.1 */
 const fbM=(mx[0]+mx[1]+mx[2]+mx[3])*.25;
 this.shimBuf[this.shimW]=fbM;this.shimW=(this.shimW+1)&this.SBM;
-const gs=1024;const rdA=Math.floor(this.shimR);const frA=this.shimR-rdA;
-const sA=this.shimBuf[rdA&this.SBM]*(1-frA)+this.shimBuf[(rdA+1)&this.SBM]*frA;
-const eA=.5*(1-Math.cos(2*Math.PI*((this.shimR/gs)%1)));
-const rdB=this.shimR+gs/2;const rdBi=Math.floor(rdB);const frB=rdB-rdBi;
-const sB=this.shimBuf[rdBi&this.SBM]*(1-frB)+this.shimBuf[(rdBi+1)&this.SBM]*frB;
-const eB=.5*(1-Math.cos(2*Math.PI*((rdB/gs)%1)));
-const shimOut=sA*eA+sB*eB;this.shimR+=2;
-while(this.shimR>=this.SB)this.shimR-=this.SB;
-const sd=this.shimW-this.shimR;if(sd<0||sd>this.SB-gs)
-{this.shimR=this.shimW-this.SB/2;if(this.shimR<0)this.shimR+=this.SB}
-/* Feedback with damping + shimmer + tanh limiter */
+const gs=8192;const gsp=gs*.25;
+let shimRaw=0;
+for(let g=0;g<4;g++){
+const off=g*gsp;const rdP=this.shimR+off;
+const rd=Math.floor(rdP);const fr=rdP-rd;
+const s0=this.shimBuf[rd&this.SBM],s1=this.shimBuf[(rd+1)&this.SBM];
+const samp=s0*(1-fr)+s1*fr;
+const gp=((this.shimR+off)/gs)%1;
+const env=.5*(1-Math.cos(2*Math.PI*gp));
+shimRaw+=samp*env}
+shimRaw*=.5; /* 4 Hann windows at 1/4 offset sum to 2.0 */
+/* Sparkle: high-shelf boost on shimmer (clean, no waveshaping) */
+this.shimLP+=.12*(shimRaw-this.shimLP);
+const shimHF=shimRaw-this.shimLP;
+const shimOut=shimRaw+shimHF*.6;
+this.shimR+=2; /* 2x speed = octave up */
+const sd=this.shimW-this.shimR;
+if(sd<0||sd>this.SB-gs*2){this.shimR=this.shimW-this.SB/2;if(this.shimR<0)this.shimR+=this.SB}
+/* Feedback: damped body + shimmer with headroom scaling */
 for(let l=0;l<4;l++){let fb=mx[l]*effFb;
-this.LLP[l]+=pDmp*(fb-this.LLP[l]);fb=this.LLP[l];
-/* DC blocker — prevents LF drone buildup at high space */
-const dc=fb-this.LDC[l]+.997*this.LDCP[l];this.LDC[l]=fb;this.LDCP[l]=dc;fb=dc;
-fb+=shimOut*shimAmt;
-if(fb>.6||fb<-.6)fb=Math.tanh(fb)*.95;
+this.LLP[l]+=pDmp*(fb-this.LLP[l]);
+const fbDamped=this.LLP[l];
+/* DC blocker */
+const dc=fbDamped-this.LDC[l]+.997*this.LDCP[l];this.LDC[l]=fbDamped;this.LDCP[l]=dc;
+const fbShimmer=shimOut*shimAmt*.45*shimScale;
+fb=dc+fbShimmer;
+/* Safety limiter at 0.9 — soft knee, should rarely engage */
+if(fb>.9)fb=.9+(fb-.9)*.1;
+else if(fb<-.9)fb=-.9+(fb+.9)*.1;
 this.L[l][this.LP[l]]=df+fb;this.LP[l]=(this.LP[l]+1)&NM}
-wL+=(tp[0]+tp[2])*.45*revSend;wR+=(tp[1]+tp[3])*.45*revSend}
+/* Reverb output with sparkle shelf + compensated gain */
+let rawL=(tp[0]+tp[2])*.35,rawR=(tp[1]+tp[3])*.35;
+const hfL=rawL-this.spkL;this.spkL+=.15*hfL;
+const hfR=rawR-this.spkR;this.spkR+=.15*hfR;
+rawL+=hfL*spkAmt;rawR+=hfR*spkAmt;
+const revLev=this.space*3;
+wL+=rawL*revLev;wR+=rawR*revLev}
 let xL=dL*(1-this.mix)+wL*this.mix;let xR=dR*(1-this.mix)+wR*this.mix;
-oL[i]=Math.tanh(xL*1.5)*.667;oR[i]=Math.tanh(xR*1.5)*.667;
-/* Store final output for grain tail feedback — after tanh so it's clean */
-this.prevWL=oL[i];this.prevWR=oR[i];
-const lv=Math.abs(oL[i])>Math.abs(oR[i])?Math.abs(oL[i]):Math.abs(oR[i]);
+/* Transparent limiter — only engages above 0.8 */
+if(xL>.8)xL=.8+Math.tanh((xL-.8)*5)*.2;
+else if(xL<-.8)xL=-.8+Math.tanh((xL+.8)*5)*.2;
+if(xR>.8)xR=.8+Math.tanh((xR-.8)*5)*.2;
+else if(xR<-.8)xR=-.8+Math.tanh((xR+.8)*5)*.2;
+oL[i]=xL;oR[i]=xR;
+this.prevWL=xL;this.prevWR=xR;
+const lv=Math.abs(xL)>Math.abs(xR)?Math.abs(xL):Math.abs(xR);
 if(lv>this.pk)this.pk=lv}
 this.mc+=F;if(this.mc>=2048){this.mc=0;this.port.postMessage({peak:this.pk});this.pk=0}
 return true}
