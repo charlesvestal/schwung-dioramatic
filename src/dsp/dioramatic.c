@@ -598,19 +598,20 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
        into rich harmonics because the reverb feedback is already high */
     static const float shimmer_amounts[4] = {0.07f, 0.10f, 0.15f, 0.20f};
     float shimmer_level = shimmer_amounts[mode];
+    /* Scale shimmer injection down as feedback approaches 1.0.
+       Without this, shimmer adds energy on top of already-high feedback,
+       pushing total loop gain above 1.0 and causing self-oscillation.
+       At feedback=0.99, headroom is 0.1 → shimmer gets 10% of its full level. */
+    float headroom = 1.0f - effective_feedback;
+    float shimmer_scale = fminf(1.0f, headroom * 10.0f);  /* full shimmer below fb=0.9 */
 
-    /* Apply feedback with SPLIT damping:
-       The reverb body gets damped (highs decay naturally).
-       The shimmer sparkle BYPASSES the damping — it stays bright
-       through every cycle, creating persistent high-frequency content
-       that cascades upward. This is what creates real sparkle. */
     for (int i = 0; i < FDN_LINES; i++) {
         float fb = mixed[i] * effective_feedback;
         /* Damped path: reverb body (warm, natural decay) */
         rev->lp_state[i] += p->damping * (fb - rev->lp_state[i]);
         float fb_damped = rev->lp_state[i];
-        /* Lightly damped path: shimmer sparkle (keeps HF much longer than body) */
-        float fb_sparkle = shimmer_out * shimmer_level * 0.45f;
+        /* Shimmer sparkle bypasses damping but scales with headroom to prevent self-oscillation */
+        float fb_sparkle = shimmer_out * shimmer_level * 0.45f * shimmer_scale;
         fb = fb_damped + fb_sparkle;
         /* Soft limiter: tanh keeps signal musical instead of hard clipping */
         if (fb > 0.7f || fb < -0.7f) {
