@@ -363,6 +363,9 @@ typedef struct {
         float amp_scale;    /* amplitude multiplier for this wave */
     } scatter_waves[4];
 
+    /* Input highpass — removes rumble before capture buffer */
+    float in_hp_l, in_hp_r;  /* one-pole HP state */
+
     /* MIDI clock */
     uint32_t midi_clock_tick_count;
     uint32_t midi_clock_sample_counter;  /* samples since last clock reset */
@@ -1780,10 +1783,22 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
         float dry_l = (float)audio_inout[i * 2] / 32768.0f;
         float dry_r = (float)audio_inout[i * 2 + 1] / 32768.0f;
 
-        /* 2. Write to capture buffer — dry input only. */
+        /* 1b. Input highpass — removes rumble from what grains and reverb see.
+               Dry output stays full-range. Only the wet path gets cleaned.
+               Warmth 0 = HP at ~150Hz (bright, sparkly)
+               Warmth 1 = HP at ~20Hz (keeps full body) */
         int wp = inst->capture.write_pos;
-        inst->capture.buffer[wp].l = dry_l;
-        inst->capture.buffer[wp].r = dry_r;
+        {
+            float hp_c = 0.99f - (1.0f - inst->warmth) * 0.008f;
+            float new_hp_l = hp_c * inst->in_hp_l + dry_l - hp_c * dry_l;
+            float new_hp_r = hp_c * inst->in_hp_r + dry_r - hp_c * dry_r;
+            float cap_l = dry_l * inst->warmth + new_hp_l * (1.0f - inst->warmth);
+            float cap_r = dry_r * inst->warmth + new_hp_r * (1.0f - inst->warmth);
+            inst->in_hp_l = new_hp_l;
+            inst->in_hp_r = new_hp_r;
+            inst->capture.buffer[wp].l = cap_l;
+            inst->capture.buffer[wp].r = cap_r;
+        }
 
         /* Track hot spots — positions where there's actual musical content.
            Record a position every ~50ms when input is loud enough. */
