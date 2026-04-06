@@ -564,7 +564,11 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     float grain_phase_b = fmodf((rev->shimmer_read_phase_a + phase_b_offset) / (float)SHIMMER_GRAIN_SIZE, 1.0f);
     float env_b = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * grain_phase_b));
 
-    float shimmer_raw = samp_a * env_a + samp_b * env_b;
+    /* Smooth the shimmer output to prevent the two-grain crossfade
+       from creating a pulsing/clicking pattern in the reverb tail */
+    float shimmer_raw_instant = samp_a * env_a + samp_b * env_b;
+    rev->sparkle_state_r += 0.3f * (shimmer_raw_instant - rev->sparkle_state_r);
+    float shimmer_raw = rev->sparkle_state_r;
 
     /* SPARKLE GENERATOR: create high-frequency harmonics from the shimmer.
        tanh(x*4) generates odd harmonics (3rd, 5th, 7th...) from any input.
@@ -1467,27 +1471,23 @@ static void delay_configure_taps_if_dirty(dioramatic_instance_t *inst) {
    Each knob fades in a specific grain behavior from the algorithms you liked.
    The grain functions are called with internal params set by the knob mapping. */
 static void algorithm_tick(dioramatic_instance_t *inst) {
-    /* Smear: Haze A micro-grain cloud — VERY low density to avoid noise.
-       The reverb does the wash, grains just add texture. */
+    /* Smear: Mosaic at very low density — long overlapping grains for texture.
+       NOT Haze — Haze fires too fast and creates audible tapping. */
     if (inst->smear > 0.1f) {
-        inst->algorithm = 3; inst->variation = 0;
-        inst->activity = inst->smear * 0.15f;  /* was 1:1 — now 15% */
-        haze_tick(inst);
-    }
-
-    /* Shimmer: Haze C octave-up grains — sparse, let reverb shimmer do the work */
-    if (inst->shimmer > 0.1f) {
-        inst->algorithm = 3; inst->variation = 2;
-        inst->activity = inst->shimmer * 0.1f;  /* was 1:1 — now 10% */
-        haze_tick(inst);
-    }
-
-    /* Scatter: Mosaic cascading loops — reduced density */
-    if (inst->scatter > 0.1f) {
-        inst->algorithm = 0; inst->variation = 3;
-        inst->activity = inst->scatter * 0.2f;  /* was 1:1 — now 20% */
+        inst->algorithm = 0; inst->variation = 0;
+        inst->activity = inst->smear * 0.15f;
         mosaic_tick(inst);
     }
+
+    /* Scatter: Mosaic at different variation for cascading loops */
+    if (inst->scatter > 0.1f) {
+        inst->algorithm = 0; inst->variation = 3;
+        inst->activity = inst->scatter * 0.15f;
+        mosaic_tick(inst);
+    }
+
+    /* Shimmer grain texture is handled ONLY by the sparkle ping layer below —
+       not by Haze, which fires hundreds of grains per second = tapping clicks */
 
     /* Drift > 0.5: add Tunnel B overtone drones for sustained evolving texture */
     if (inst->drift > 0.5f) {
