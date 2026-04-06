@@ -484,8 +484,12 @@ static inline float svf_lowpass(svf_state_t *s, const dioramatic_instance_t *ins
 
 static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, float *out_l, float *out_r, float sustain_boost) {
     const reverb_preset_t *p = &reverb_presets[mode];
-    /* Sustain boost: raise feedback beyond the preset value toward 0.998 */
-    float effective_feedback = p->feedback + sustain_boost * (0.998f - p->feedback);
+    /* Sustain boost: raise feedback toward 0.995 with a sqrt curve.
+       Linear mapping pushes too close to 1.0 at high sustain, causing blowout.
+       sqrt(0.88) = 0.938 instead of 0.88 → gentler at extremes, still long tails.
+       Cap at 0.995 instead of 0.998 to leave headroom for shimmer energy. */
+    float sb = sqrtf(sustain_boost);
+    float effective_feedback = p->feedback + sb * (0.995f - p->feedback);
 
     /* Pre-delay */
     float pd_l, pd_r;
@@ -608,9 +612,10 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
         /* Lightly damped path: shimmer sparkle (keeps HF much longer than body) */
         float fb_sparkle = shimmer_out * shimmer_level * 0.45f;
         fb = fb_damped + fb_sparkle;
-        /* Safety limiter */
-        if (fb > 0.9f) fb = 0.9f;
-        else if (fb < -0.9f) fb = -0.9f;
+        /* Soft limiter: tanh keeps signal musical instead of hard clipping */
+        if (fb > 0.7f || fb < -0.7f) {
+            fb = tanhf(fb);
+        }
         /* Write with input */
         rev->lines[i][rev->write_pos[i]] = diff_in + fb;
         rev->write_pos[i] = (rev->write_pos[i] + 1) & (FDN_MAX_DELAY - 1);
