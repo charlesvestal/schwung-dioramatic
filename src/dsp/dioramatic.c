@@ -619,8 +619,8 @@ static void fdn_process(fdn_reverb_t *rev, int mode, float in_l, float in_r, flo
     }
 
     /* Raw stereo output from alternating lines */
-    float raw_l = (taps[0] + taps[2]) * 0.35f;
-    float raw_r = (taps[1] + taps[3]) * 0.35f;
+    float raw_l = (taps[0] + taps[2]) * 0.45f;
+    float raw_r = (taps[1] + taps[3]) * 0.45f;
 
     /* High-frequency sparkle shelf: gentle boost to upper harmonics.
        One-pole highpass extracts HF content, blend it back in for brightness.
@@ -1907,8 +1907,9 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
                With space=1.0 and typical input ~0.3, we need ~0.15x scaling. */
             float rev_in_scale = inst->space * 0.15f;
             fdn_process(&inst->reverb, inst->reverb_mode, (dry_l + wet_l) * rev_in_scale, (dry_r + wet_r) * rev_in_scale, &rev_out_l, &rev_out_r, inst->sustain);
-            /* Compensate for reduced input: boost output to restore perceived level */
-            float rev_level = inst->space * 3.0f;
+            /* Compensate for 0.15x input scaling. 5.0x gives ~83% of original level —
+               close to original but with headroom for high space+sustain combos */
+            float rev_level = inst->space * 5.0f;
             wet_l += rev_out_l * rev_level;
             wet_r += rev_out_r * rev_level;
         }

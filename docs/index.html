@@ -263,11 +263,11 @@ if(fb>.9)fb=.9+(fb-.9)*.1;
 else if(fb<-.9)fb=-.9+(fb+.9)*.1;
 this.L[l][this.LP[l]]=df+fb;this.LP[l]=(this.LP[l]+1)&NM}
 /* Reverb output with sparkle shelf + compensated gain */
-let rawL=(tp[0]+tp[2])*.35,rawR=(tp[1]+tp[3])*.35;
+let rawL=(tp[0]+tp[2])*.45,rawR=(tp[1]+tp[3])*.45;
 const hfL=rawL-this.spkL;this.spkL+=.15*hfL;
 const hfR=rawR-this.spkR;this.spkR+=.15*hfR;
 rawL+=hfL*spkAmt;rawR+=hfR*spkAmt;
-const revLev=this.space*3;
+const revLev=this.space*5;
 wL+=rawL*revLev;wR+=rawR*revLev}
 let xL=dL*(1-this.mix)+wL*this.mix;let xR=dR*(1-this.mix)+wR*this.mix;
 /* Transparent limiter — only engages above 0.8 */
